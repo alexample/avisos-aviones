@@ -24,6 +24,7 @@ final class Alerta {
     boolean soloMilitar = false;
     boolean soloEmergencia = false;
     final List<String> modelos = new ArrayList<>();    // códigos OACI (A20N, B738, EC35…), admite *
+    final List<String> servicios = new ArrayList<>();  // etiquetas del usuario (Servicios.IDS)
     final List<String> origenes = new ArrayList<>();   // códigos IATA
     final List<String> destinos = new ArrayList<>();
     int altMaxM = 0;               // 0 = cualquier altitud
@@ -43,7 +44,7 @@ final class Alerta {
         double distKm;
         boolean heli, militar, emergencia;
         int altM;
-        String matricula = "", indicativo = "", squawk = "", clase = "", tipoCodigo = "";
+        String matricula = "", indicativo = "", squawk = "", clase = "", tipoCodigo = "", servicio = "";
     }
 
     boolean necesitaRuta() {
@@ -89,6 +90,7 @@ final class Alerta {
         if (soloMilitar && !a.militar) return false;
         if (soloEmergencia && !a.emergencia) return false;
         if (!modelos.isEmpty() && !Ajustes.coincide(String.join(",", modelos), a.tipoCodigo)) return false;
+        if (!servicios.isEmpty() && !servicios.contains(a.servicio)) return false;
         if (!Ajustes.coincide(matriculas, a.matricula)) return false;
         if (!Ajustes.coincide(squawks, a.squawk)) return false;
         return Ajustes.coincide(indicativos, a.indicativo);
@@ -115,6 +117,7 @@ final class Alerta {
     String icono() {
         if (soloEmergencia) return "🚨";
         if (soloMilitar) return "🎖️";
+        if (servicios.size() == 1) return Servicios.icono(servicios.get(0));
         if (clases.size() == 1) return Tipos.iconoClase(clases.get(0));
         if (!modelos.isEmpty()) return "🔧";
         return !origenes.isEmpty() || !destinos.isEmpty() ? "🛫" : "✈️";
@@ -133,6 +136,14 @@ final class Alerta {
             }
         }
         if (soloMilitar) sb.append(" militar");
+        if (!servicios.isEmpty()) {
+            sb.append(" de ");
+            for (int i = 0; i < servicios.size(); i++) {
+                String t = Servicios.legible(servicios.get(i));
+                if (i > 0) sb.append(i == servicios.size() - 1 ? " o " : ", ");
+                sb.append(t.substring(t.indexOf(' ') + 1));
+            }
+        }
         if (soloEmergencia) sb.append(" en emergencia");
         return sb.toString();
     }
@@ -192,6 +203,7 @@ final class Alerta {
             o.put("solo_militar", soloMilitar);
             o.put("solo_emergencia", soloEmergencia);
             o.put("modelos", new JSONArray(modelos));
+            o.put("servicios", new JSONArray(servicios));
             o.put("origenes", new JSONArray(origenes));
             o.put("destinos", new JSONArray(destinos));
             o.put("alt_max_m", altMaxM);
@@ -228,6 +240,8 @@ final class Alerta {
                 default: break;
             }
         }
+        JSONArray se = o.optJSONArray("servicios");
+        if (se != null) for (int i = 0; i < se.length(); i++) a.servicios.add(se.optString(i));
         JSONArray mo = o.optJSONArray("modelos");
         if (mo != null) for (int i = 0; i < mo.length(); i++) a.modelos.add(mo.optString(i));
         JSONArray or = o.optJSONArray("origenes");

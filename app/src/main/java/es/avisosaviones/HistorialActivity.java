@@ -94,7 +94,8 @@ public class HistorialActivity extends Activity {
         resumen.setText(entradas.isEmpty()
                 ? "Todavía no ha pasado nada. Aquí aparecerá cada aparato que te avise."
                 : String.format(Locale.getDefault(), "%d en total · %d hoy · %d helicópteros\nToca uno para abrirlo en Flightradar24.",
-                    entradas.size(), hoy, helis));
+                    entradas.size(), hoy, helis)
+                    + "\nMantén pulsado uno para etiquetarlo (DGT, 112, policía…).");
 
         SimpleDateFormat fHoy = new SimpleDateFormat("HH:mm", Locale.getDefault());
         SimpleDateFormat fOtro = new SimpleDateFormat("dd/MM HH:mm", Locale.getDefault());
@@ -120,6 +121,10 @@ public class HistorialActivity extends Activity {
             String ruta = e.optString("ruta");
             String emerg = e.optString("emergencia");
             String alertaNombre = e.optString("alerta");
+            final String hexE = e.optString("hex");
+            final String regE = !e.optString("reg").isEmpty() ? e.optString("reg") : e.optString("matricula");
+            final String nombreE = e.optString("nombre");
+            String servicioActual = Servicios.de(this, hexE, regE);
 
             String icono = (heli ? "🚁" : "✈️") + (e.optBoolean("militar") ? "🎖️" : "")
                     + (emerg.isEmpty() ? "" : "🚨");
@@ -129,7 +134,8 @@ public class HistorialActivity extends Activity {
                     + (linea2.length() > 0 ? "\n" + linea2 : "")
                     + (ruta.isEmpty() ? "" : "\n🛫 " + ruta)
                     + "\n" + linea3
-                    + (alertaNombre.isEmpty() ? "" : "\n🔔 " + alertaNombre));
+                    + (alertaNombre.isEmpty() ? "" : "\n" + (alertaNombre.contains("🔔") ? alertaNombre : "🔔 " + alertaNombre))
+                    + (servicioActual.isEmpty() ? "" : "\n🏷️ " + Servicios.legible(servicioActual)));
             t.setTextSize(15);
             t.setPadding(dp(12), dp(10), dp(12), dp(10));
             t.setTextColor(Ui.TEXTO);
@@ -143,11 +149,29 @@ public class HistorialActivity extends Activity {
                 t.setOnClickListener(v -> startActivity(AbrirFr24Activity.intentPara(this, url, reg, cs)));
             }
 
+            t.setOnLongClickListener(v -> { etiquetar(hexE, regE, nombreE); return true; });
+
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.topMargin = dp(6);
             lista.addView(t, lp);
         }
+    }
+
+    /** Marcar una aeronave como DGT, 112, policía… para poder filtrar por servicio. */
+    private void etiquetar(String hex, String reg, String nombre) {
+        String actual = Servicios.de(this, hex, reg);
+        String[] opciones = new String[Servicios.TXT.length + (actual.isEmpty() ? 0 : 1)];
+        System.arraycopy(Servicios.TXT, 0, opciones, 0, Servicios.TXT.length);
+        if (!actual.isEmpty()) opciones[opciones.length - 1] = "❌ Quitar etiqueta";
+        new AlertDialog.Builder(this)
+                .setTitle("¿Qué es " + nombre + (reg.isEmpty() || nombre.contains(reg) ? "" : " (" + reg + ")") + "?")
+                .setItems(opciones, (d, i) -> {
+                    if (i >= Servicios.IDS.length) Servicios.quitar(this, hex, reg);
+                    else Servicios.etiquetar(this, hex, reg, Servicios.IDS[i]);
+                    cargar();
+                })
+                .show();
     }
 
     private static void agregar(StringBuilder sb, String s) {

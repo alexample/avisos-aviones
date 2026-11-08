@@ -199,7 +199,16 @@ public class VigilanciaService extends Service {
             }
         }
         java.util.Set<String> globales = new java.util.LinkedHashSet<>();
-        for (Alerta al : activas) globales.addAll(al.consultasGlobales());
+        for (Alerta al : activas) {
+            globales.addAll(al.consultasGlobales());
+            // Sin límite + servicio: buscar por Mode S las aeronaves etiquetadas
+            if (al.sinLimite() && !al.servicios.isEmpty()) {
+                List<String> hexes = Servicios.hexDe(this, al.servicios);
+                for (int i = 0; i < hexes.size(); i += 20) {
+                    globales.add("hex/" + String.join(",", hexes.subList(i, Math.min(hexes.size(), i + 20))));
+                }
+            }
+        }
         JSONArray lejos = consultasGlobales(globales);
         for (int i = 0; i < lejos.length(); i++) {
             JSONObject o = lejos.optJSONObject(i);
@@ -233,6 +242,7 @@ public class VigilanciaService extends Service {
             av.matricula = a.optString("r", "");
             av.indicativo = a.optString("flight", "").trim();
             av.squawk = a.optString("squawk", "").trim();
+            av.servicio = Servicios.de(this, a.optString("hex", ""), av.matricula);
 
             // Alertas que cumple sin mirar la ruta
             List<Alerta> candidatas = new ArrayList<>();
@@ -270,7 +280,8 @@ public class VigilanciaService extends Service {
 
             coinciden++;
             avisados.put(hex, ahora);
-            avisar(a, av.heli, av.distKm, av.altM, av.distKm < 3, datosFr24, cumplida.nombre);
+            avisar(a, av.heli, av.distKm, av.altM, av.distKm < 3, datosFr24,
+                    (av.servicio.isEmpty() ? "" : Servicios.legible(av.servicio) + " · ") + "🔔 " + cumplida.nombre);
             if (coinciden > 15) break; // por si una alerta muy amplia dispara muchos a la vez
         }
 
@@ -511,7 +522,7 @@ public class VigilanciaService extends Service {
         Notification n = new Notification.Builder(this, CANAL_AVISOS)
                 .setSmallIcon(R.drawable.ic_avion)
                 .setContentTitle(titulo)
-                .setSubText("🔔 " + nombreAlerta)
+                .setSubText(nombreAlerta)
                 .setContentText(cuerpo.toString().replace("\n", " · "))
                 .setStyle(new Notification.BigTextStyle().bigText(cuerpo.toString()))
                 .setContentIntent(piFr24)

@@ -47,6 +47,7 @@ public class AlertaActivity extends Activity {
     private Switch swMinimo;
     private final List<TextView> chipsTipo = new ArrayList<>();
     private TextView chipMilitar, chipEmergencia;
+    private final List<TextView> chipsServicio = new ArrayList<>();
     private ViewGroup chipsModelo;
     private ViewGroup chipsOrigen, chipsDestino;
     private ScrollView scroll;
@@ -125,6 +126,28 @@ public class AlertaActivity extends Activity {
         txtTipoAyuda = Ui.texto(this, "", 13, Ui.TEXTO_SUAVE, false);
         tTipo.addView(txtTipoAyuda, Ui.ancho(10, this));
         col.addView(tTipo, Ui.ancho(12, this));
+
+        // ---------- Servicio
+        LinearLayout tServ = Ui.tarjeta(this, "🏷️ Servicio",
+                "Solo funciona con aeronaves que hayas etiquetado: mantén pulsado un paso en el Historial, o añade una matrícula aquí.");
+        ViewGroup filaServ = Ui.filaChips(this);
+        for (int i = 0; i < Servicios.IDS.length; i++) {
+            final String id = Servicios.IDS[i];
+            TextView ch = Ui.chip(this, Servicios.TXT[i]);
+            ch.setOnClickListener(v -> {
+                if (alerta.servicios.contains(id)) alerta.servicios.remove(id); else alerta.servicios.add(id);
+                refrescarServicios();
+                refrescarTipo();
+                refrescarDistancias();
+            });
+            chipsServicio.add(ch);
+            filaServ.addView(ch);
+        }
+        tServ.addView(filaServ, Ui.ancho(8, this));
+        TextView gestionar = Ui.botonSecundario(this, "Aeronaves etiquetadas…");
+        gestionar.setOnClickListener(v -> gestionarEtiquetas());
+        tServ.addView(gestionar, Ui.ancho(12, this));
+        col.addView(tServ, Ui.ancho(12, this));
 
         // ---------- Modelo
         LinearLayout tModelo = Ui.tarjeta(this, "🔧 Modelo",
@@ -282,6 +305,7 @@ public class AlertaActivity extends Activity {
         refrescarTipo();
         refrescarDistancias();
         refrescarAltitud();
+        refrescarServicios();
         pintarChipsModelos();
         pintarChipsAeropuertos(alerta.origenes, chipsOrigen);
         pintarChipsAeropuertos(alerta.destinos, chipsDestino);
@@ -349,6 +373,58 @@ public class AlertaActivity extends Activity {
         if (alerta.soloEmergencia) sb.append("\nEmergencia = squawk 7700 (emergencia), 7600 (fallo de radio) o 7500 (secuestro).");
         if (alerta.soloMilitar) sb.append("\nMilitar = marcado así en la base de datos de airplanes.live.");
         txtTipoAyuda.setText(sb.toString());
+    }
+
+    // ------------------------------------------------------------ servicios
+
+    private void refrescarServicios() {
+        for (int i = 0; i < Servicios.IDS.length; i++)
+            Ui.marcarChip(this, chipsServicio.get(i), alerta.servicios.contains(Servicios.IDS[i]));
+    }
+
+    private void gestionarEtiquetas() {
+        List<String[]> l = Servicios.todas(this);
+        String[] items = new String[l.size() + 1];
+        items[0] = "➕ Añadir una matrícula";
+        for (int i = 0; i < l.size(); i++) items[i + 1] = l.get(i)[1] + "   ✕";
+        new AlertDialog.Builder(this)
+                .setTitle(l.isEmpty() ? "Aún no has etiquetado ninguna" : "Toca una para quitarla")
+                .setItems(items, (d, i) -> {
+                    if (i == 0) { anadirMatricula(); return; }
+                    String[] e = l.get(i - 1);
+                    new AlertDialog.Builder(this)
+                            .setMessage("¿Quitar «" + e[1] + "»?")
+                            .setPositiveButton("Quitar", (d2, w) -> { Servicios.quitarClave(this, e[0]); gestionarEtiquetas(); })
+                            .setNegativeButton("Cancelar", null)
+                            .show();
+                })
+                .setNegativeButton("Cerrar", null)
+                .show();
+    }
+
+    private void anadirMatricula() {
+        EditText reg = new EditText(this);
+        reg.setHint("Ej: EC-ABC");
+        reg.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        LinearLayout l = new LinearLayout(this);
+        l.setPadding(dp(24), dp(8), dp(24), 0);
+        l.addView(reg, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        new AlertDialog.Builder(this)
+                .setTitle("Matrícula de la aeronave")
+                .setView(l)
+                .setPositiveButton("Siguiente", (d, w) -> {
+                    String r = reg.getText().toString().trim().toUpperCase(Locale.ROOT);
+                    if (r.length() < 3) return;
+                    new AlertDialog.Builder(this)
+                            .setTitle("¿Qué es " + r + "?")
+                            .setItems(Servicios.TXT, (d2, i) -> {
+                                Servicios.etiquetar(this, null, r, Servicios.IDS[i]);
+                                Toast.makeText(this, r + " → " + Servicios.TXT[i], Toast.LENGTH_SHORT).show();
+                            })
+                            .show();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
     }
 
     // ------------------------------------------------------------ modelos
@@ -458,12 +534,12 @@ public class AlertaActivity extends Activity {
         leerCamposTexto();
         if (alerta.sinLimite()) {
             txtDistancia.setText("🌍 Sin límite");
-            boolean vale = !alerta.consultasGlobales().isEmpty();
+            boolean vale = !alerta.consultasGlobales().isEmpty() || !alerta.servicios.isEmpty();
             txtAvisoLimite.setVisibility(View.VISIBLE);
             txtAvisoLimite.setTextColor(vale ? Ui.TEXTO_SUAVE : Ui.ROJO);
             txtAvisoLimite.setText(vale
                     ? "Te avisará esté donde esté la aeronave, en todo el mundo."
-                    : "⚠️ Sin límite solo funciona si marcas Militar o Emergencia, eliges un modelo concreto, "
+                    : "⚠️ Sin límite solo funciona si marcas Militar, Emergencia o un servicio, eliges un modelo concreto, "
                       + "o pones un squawk, matrícula o indicativo exactos (en «Más filtros», sin * ni !).");
         } else {
             txtDistancia.setText("Hasta " + Alerta.km(alerta.radioKm));
@@ -635,7 +711,7 @@ public class AlertaActivity extends Activity {
             return;
         }
         leerCamposTexto();
-        if (alerta.sinLimite() && alerta.consultasGlobales().isEmpty()) {
+        if (alerta.sinLimite() && alerta.consultasGlobales().isEmpty() && alerta.servicios.isEmpty()) {
             Toast.makeText(this, "Para «sin límite» marca Militar o Emergencia, elige un modelo, o pon un squawk, matrícula o indicativo exactos",
                     Toast.LENGTH_LONG).show();
             return;
