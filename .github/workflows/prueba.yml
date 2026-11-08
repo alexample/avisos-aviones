@@ -7,13 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          for u in \
-            https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/icao_aircraft_types.json \
-            https://raw.githubusercontent.com/wiedehopf/tar1090-db/csv/icao_aircraft_types.json \
-            https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/icao_aircraft_types2.json \
-            https://raw.githubusercontent.com/wiedehopf/tar1090/master/html/db2/icao_aircraft_types.js \
-            https://raw.githubusercontent.com/wiedehopf/tar1090/master/html/db/icao_aircraft_types.js ; do
-            echo "== $u"; curl -sSL -m 30 "$u" -w '\nHTTP %{http_code} size %{size_download}\n' | head -c 400; echo; curl -sSL -m 30 "$u" -o /dev/null -w 'HTTP %{http_code} size %{size_download}\n'
+          echo "== db dir"; curl -sS "https://api.github.com/repos/wiedehopf/tar1090-db/contents/db?ref=master" | grep '"name"' | head -40
+          for u in https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/icao_aircraft_types.js \
+                   https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/icao_aircraft_types2.js ; do
+            echo "== $u"; curl -sSL -m 30 "$u" | head -c 600; echo; curl -sSL -m 30 "$u" -o /dev/null -w 'HTTP %{http_code} size %{size_download}\n'
           done
-          echo "== tree tar1090-db"; curl -sS "https://api.github.com/repos/wiedehopf/tar1090-db/git/trees/master" | grep '"path"' | head -30
-          echo "== tree tar1090 html"; curl -sS "https://api.github.com/repos/wiedehopf/tar1090/contents/html" | grep '"name"' | grep -i -E "type|db" | head
