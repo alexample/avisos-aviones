@@ -10,6 +10,12 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Para poder ver si la app de Flightradar24 está instalada (Android 11+) -->
+    <queries>
+        <package android:name="com.flightradar24free" />
+        <package android:name="com.flightradar24pro" />
+    </queries>
+
     <application
         android:label="Avisos Aviones"
         android:icon="@drawable/ic_avion"
@@ -28,6 +34,14 @@
         <activity
             android:name=".HistorialActivity"
             android:exported="false" />
+
+        <activity
+            android:name=".AbrirFr24Activity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <service
             android:name=".VigilanciaService"

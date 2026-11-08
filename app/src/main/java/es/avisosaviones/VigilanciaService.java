@@ -358,8 +358,7 @@ public class VigilanciaService extends Service {
             Registro.guardar(this, e);
         } catch (Exception ignored) {}
 
-        Intent verFr24 = new Intent(Intent.ACTION_VIEW, Uri.parse(urlFr24))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent verFr24 = AbrirFr24Activity.intentPara(this, urlFr24);
         PendingIntent piFr24 = PendingIntent.getActivity(this, idAviso * 2, verFr24,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 

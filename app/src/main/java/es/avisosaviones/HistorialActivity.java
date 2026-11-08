@@ -129,9 +129,7 @@ public class HistorialActivity extends Activity {
 
             String url = e.optString("url_fr24");
             if (!url.isEmpty()) {
-                t.setOnClickListener(v -> {
-                    try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception ignored) {}
-                });
+                t.setOnClickListener(v -> AbrirFr24Activity.abrir(this, url));
             }
 
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
