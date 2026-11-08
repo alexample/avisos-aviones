@@ -356,10 +356,12 @@ public class VigilanciaService extends Service {
             if (!Double.isNaN(rumbo)) e.put("rumbo", puntoCardinal(rumbo));
             if (textoEmergencia != null) e.put("emergencia", textoEmergencia);
             e.put("url_fr24", urlFr24);
+            e.put("reg", matricula);
+            e.put("callsign", indicativo);
             Registro.guardar(this, e);
         } catch (Exception ignored) {}
 
-        Intent verFr24 = AbrirFr24Activity.intentPara(this, urlFr24);
+        Intent verFr24 = AbrirFr24Activity.intentPara(this, urlFr24, matricula, indicativo);
         PendingIntent piFr24 = PendingIntent.getActivity(this, idAviso * 2, verFr24,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
