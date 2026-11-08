@@ -184,17 +184,34 @@ public class VigilanciaService extends Service {
             publicarEstado("Sin alertas encendidas\nEnciende alguna en la app");
             return;
         }
-        double radioConsultaKm = Math.min(400, Alertas.radioMaximo(activas));
-        int radioNm = (int) Math.max(1, Math.ceil(radioConsultaKm / 1.852));
+        double radioConsultaKm = Math.min(400, Alertas.radioMaximo(activas)); // 0 si todas son "sin límite"
 
-        JSONArray aparatos = descargar(yo.getLatitude(), yo.getLongitude(), radioNm);
+        // Aparatos alrededor (alertas con distancia) + búsquedas globales (alertas sin límite)
+        Map<String, JSONObject> porHex = new java.util.LinkedHashMap<>();
+        int consultados = 0;
+        if (radioConsultaKm > 0) {
+            int radioNm = (int) Math.max(1, Math.ceil(radioConsultaKm / 1.852));
+            JSONArray cerca0 = descargar(yo.getLatitude(), yo.getLongitude(), radioNm);
+            consultados = cerca0.length();
+            for (int i = 0; i < cerca0.length(); i++) {
+                JSONObject o = cerca0.optJSONObject(i);
+                if (o != null) porHex.put(o.optString("hex"), o);
+            }
+        }
+        java.util.Set<String> globales = new java.util.LinkedHashSet<>();
+        for (Alerta al : activas) globales.addAll(al.consultasGlobales());
+        JSONArray lejos = consultasGlobales(globales);
+        for (int i = 0; i < lejos.length(); i++) {
+            JSONObject o = lejos.optJSONObject(i);
+            if (o != null && !porHex.containsKey(o.optString("hex"))) porHex.put(o.optString("hex"), o);
+        }
+        List<JSONObject> aparatos = new ArrayList<>(porHex.values());
 
         Map<String, String[]> fr24 = null; // se descarga solo si hace falta, una vez por vuelta
         int cerca = 0, coinciden = 0;
         double masCerca = Double.MAX_VALUE;
         long ahora = System.currentTimeMillis();
-        for (int i = 0; i < aparatos.length(); i++) {
-            JSONObject a = aparatos.getJSONObject(i);
+        for (JSONObject a : aparatos) {
             if (!a.has("lat") || !a.has("lon")) continue;
             if ("ground".equals(a.optString("alt_baro"))) continue;
 
@@ -203,15 +220,17 @@ public class VigilanciaService extends Service {
                     a.getDouble("lat"), a.getDouble("lon"), d);
             Alerta.Aeronave av = new Alerta.Aeronave();
             av.distKm = d[0] / 1000.0;
-            if (av.distKm > radioConsultaKm) continue;
-            cerca++;
-            masCerca = Math.min(masCerca, av.distKm);
+            if (av.distKm <= radioConsultaKm) {
+                cerca++;
+                masCerca = Math.min(masCerca, av.distKm);
+            }
             av.altM = altitudMetros(a);
             av.heli = esHelicoptero(a);
             av.militar = (a.optInt("dbFlags", 0) & 1) != 0;
             av.emergencia = textoEmergencia(a.optString("squawk", "").trim(), a.optString("emergency", "none")) != null;
             av.matricula = a.optString("r", "");
             av.indicativo = a.optString("flight", "").trim();
+            av.squawk = a.optString("squawk", "").trim();
 
             // Alertas que cumple sin mirar la ruta
             List<Alerta> candidatas = new ArrayList<>();
@@ -226,29 +245,31 @@ public class VigilanciaService extends Service {
                 continue;
             }
 
-            if (fr24 == null) fr24 = cargarFr24(yo.getLatitude(), yo.getLongitude(), radioConsultaKm);
+            if (fr24 == null) fr24 = cargarFr24(yo.getLatitude(), yo.getLongitude(), Math.max(radioConsultaKm, 5));
             String[] datosFr24 = fr24.get(hex); // {id, origen, destino, vuelo, indicativo}
 
             Alerta cumplida = null;
-            String origen = null, destino = null;
+            String origen = null, destino = null, vuelo = null;
             for (Alerta al : candidatas) {
                 if (!al.necesitaRuta()) { cumplida = al; break; }
                 if (origen == null) {
                     origen = datosFr24 != null ? datosFr24[1] : "";
                     destino = datosFr24 != null ? datosFr24[2] : "";
-                    if (origen.isEmpty() && destino.isEmpty()) {
+                    vuelo = datosFr24 != null ? datosFr24[3] : "";
+                    if ((origen.isEmpty() && destino.isEmpty()) || vuelo.isEmpty()) {
                         String[] r = obtenerRuta(av.indicativo); // adsbdb como respaldo
-                        origen = r[2];
-                        destino = r[3];
+                        if (origen.isEmpty() && destino.isEmpty()) { origen = r[2]; destino = r[3]; }
+                        if (vuelo.isEmpty()) vuelo = r[4];
                     }
                 }
-                if (al.coincideRuta(origen, destino)) { cumplida = al; break; }
+                if (al.coincideRuta(origen, destino, vuelo)) { cumplida = al; break; }
             }
             if (cumplida == null) continue;
 
             coinciden++;
             avisados.put(hex, ahora);
             avisar(a, av.heli, av.distKm, av.altM, av.distKm < 3, datosFr24, cumplida.nombre);
+            if (coinciden > 15) break; // por si una alerta muy amplia dispara muchos a la vez
         }
 
         // Limpieza de la memoria de avisos
@@ -260,8 +281,9 @@ public class VigilanciaService extends Service {
                 : String.format(Locale.getDefault(), "Vigilando · %d %s (la más cercana a %s)",
                     cerca, cerca == 1 ? "aeronave" : "aeronaves", Alerta.km((float) masCerca));
         String txt = String.format(Locale.getDefault(),
-                "%s\n%d cumplen tus alertas · comprobado a las %s · GPS ±%.0f m%s",
-                titulo, coinciden, hora, yo.getAccuracy(),
+                "%s\n%d cumplen tus alertas%s · comprobado a las %s · GPS ±%.0f m%s",
+                titulo, coinciden, globales.isEmpty() ? "" : " · " + lejos.length() + " en búsquedas sin límite",
+                hora, yo.getAccuracy(),
                 estadoFr24.isEmpty() ? "" : " · " + estadoFr24);
         publicarEstado(txt);
         actualizarNotificacionServicio(String.format(Locale.getDefault(),
@@ -294,6 +316,58 @@ public class VigilanciaService extends Service {
             }
         }
         throw new Exception("sin conexión con los servidores de datos (" + ultimoError.getMessage() + ")");
+    }
+
+    // ---------------------------------------------------------------- búsquedas sin límite
+
+    private JSONArray cacheGlobal = new JSONArray();
+    private String clavesGlobal = "";
+    private long ultimaGlobal = 0;
+
+    /** Consulta (como mucho cada 30 s) los aparatos de las alertas "sin límite", en todo el mundo. */
+    private JSONArray consultasGlobales(java.util.Set<String> rutas) {
+        if (rutas.isEmpty()) { cacheGlobal = new JSONArray(); clavesGlobal = ""; return cacheGlobal; }
+        String claves = rutas.toString();
+        long ahora = System.currentTimeMillis();
+        long cada = Math.max(30_000L, Ajustes.intervaloS(this) * 1000L);
+        if (claves.equals(clavesGlobal) && ahora - ultimaGlobal < cada) return cacheGlobal;
+
+        JSONArray todo = new JSONArray();
+        boolean primera = true;
+        for (String ruta : rutas) {
+            if (!primera) { try { Thread.sleep(1100); } catch (InterruptedException ignored) {} } // límite de la API: 1/s
+            primera = false;
+            for (String base : new String[]{"https://api.airplanes.live/v2/", "https://api.adsb.lol/v2/"}) {
+                try {
+                    JSONArray ac = leerAparatos(base + ruta);
+                    for (int i = 0; i < ac.length(); i++) todo.put(ac.get(i));
+                    break;
+                } catch (Exception ignored) {}
+            }
+        }
+        cacheGlobal = todo;
+        clavesGlobal = claves;
+        ultimaGlobal = ahora;
+        return todo;
+    }
+
+    private static JSONArray leerAparatos(String url) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(10_000);
+        c.setReadTimeout(15_000);
+        c.setRequestProperty("User-Agent", "AvisosAviones/1.0 (Android)");
+        c.setRequestProperty("Accept", "application/json");
+        int code = c.getResponseCode();
+        if (code != 200) throw new Exception("HTTP " + code);
+        StringBuilder sb = new StringBuilder();
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
+            String linea;
+            while ((linea = r.readLine()) != null) sb.append(linea);
+        }
+        JSONObject json = new JSONObject(sb.toString());
+        JSONArray ac = json.optJSONArray("ac");
+        if (ac == null) ac = json.optJSONArray("aircraft");
+        return ac != null ? ac : new JSONArray();
     }
 
     private static int altitudMetros(JSONObject a) {
@@ -453,9 +527,9 @@ public class VigilanciaService extends Service {
     /** Ruta y aerolínea según adsbdb.com (gratis, sin clave). */
     private String[] obtenerRuta(String indicativo) {
         String clave = indicativo.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
-        if (clave.isEmpty()) return new String[]{"", "", "", ""};
+        if (clave.isEmpty()) return new String[]{"", "", "", "", ""};
         if (cacheRutas.containsKey(clave)) return cacheRutas.get(clave);
-        String[] res = {"", "", "", ""};
+        String[] res = {"", "", "", "", ""};
         boolean definitivo = false;
         try {
             HttpURLConnection c = (HttpURLConnection) new URL("https://api.adsbdb.com/v0/callsign/" + clave).openConnection();
@@ -479,6 +553,7 @@ public class VigilanciaService extends Service {
                     if (!o.isEmpty() && !d.isEmpty()) res[0] = o + " → " + d;
                     res[2] = codigoAeropuerto(fr.optJSONObject("origin"));
                     res[3] = codigoAeropuerto(fr.optJSONObject("destination"));
+                    res[4] = fr.optString("callsign_iata", "").trim();
                     JSONObject al = fr.optJSONObject("airline");
                     if (al != null) res[1] = al.optString("name", "").trim();
                 }

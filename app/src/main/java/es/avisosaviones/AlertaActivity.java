@@ -41,7 +41,9 @@ public class AlertaActivity extends Activity {
     private Alerta alerta;
     private boolean nueva;
 
-    private EditText nombre, matriculas, indicativos;
+    private EditText nombre, matriculas, indicativos, vuelos, squawks;
+    private TextView txtAvisoLimite;
+    private ViewGroup chipsExclOrigen, chipsExclDestino;
     private TextView txtDistancia, txtMinimo, txtAltitud, txtTipoAyuda;
     private SeekBar barraDistancia, barraMinimo, barraAltitud;
     private Switch swMinimo;
@@ -114,11 +116,15 @@ public class AlertaActivity extends Activity {
         LinearLayout tDist = Ui.tarjeta(this, "📍 ¿A qué distancia de ti?", null);
         txtDistancia = Ui.texto(this, "", 26, Ui.AZUL, true);
         tDist.addView(txtDistancia, Ui.ancho(4, this));
-        barraDistancia = barra(DISTANCIAS.length - 1, indiceCercano(DISTANCIAS, alerta.radioKm), () -> {
-            alerta.radioKm = DISTANCIAS[barraDistancia.getProgress()];
+        barraDistancia = barra(DISTANCIAS.length,
+                alerta.sinLimite() ? DISTANCIAS.length : indiceCercano(DISTANCIAS, alerta.radioKm), () -> {
+            int p = barraDistancia.getProgress();
+            alerta.radioKm = p >= DISTANCIAS.length ? 0 : DISTANCIAS[p];
             refrescarDistancias();
         });
         tDist.addView(barraDistancia, Ui.ancho(4, this));
+        txtAvisoLimite = Ui.texto(this, "", 13, Ui.TEXTO_SUAVE, false);
+        tDist.addView(txtAvisoLimite, Ui.ancho(2, this));
 
         swMinimo = new Switch(this);
         swMinimo.setText("Ignorar lo que pase muy cerca");
@@ -156,6 +162,22 @@ public class AlertaActivity extends Activity {
         }
         col.addView(tRuta, Ui.ancho(12, this));
 
+        // ---------- Ignorar aeropuertos
+        LinearLayout tIgn = Ui.tarjeta(this, "🚫 Ignorar vuelos",
+                "Por ejemplo, los que despegan del aeropuerto que tienes al lado.");
+        tIgn.addView(Ui.texto(this, "Que salen de", 14, Ui.TEXTO, true), Ui.ancho(10, this));
+        chipsExclOrigen = Ui.filaChips(this);
+        tIgn.addView(chipsExclOrigen, Ui.ancho(6, this));
+        tIgn.addView(buscadorAeropuerto("Buscar aeropuerto…", alerta.excluirOrigenes, chipsExclOrigen));
+        tIgn.addView(Ui.texto(this, "Que llegan a", 14, Ui.TEXTO, true), Ui.ancho(14, this));
+        chipsExclDestino = Ui.filaChips(this);
+        tIgn.addView(chipsExclDestino, Ui.ancho(6, this));
+        tIgn.addView(buscadorAeropuerto("Buscar aeropuerto…", alerta.excluirDestinos, chipsExclDestino));
+        TextView cercano = Ui.botonSecundario(this, "📍 Elegir un aeropuerto cerca de mí");
+        cercano.setOnClickListener(v -> elegirAeropuertoCercano());
+        tIgn.addView(cercano, Ui.ancho(14, this));
+        col.addView(tIgn, Ui.ancho(12, this));
+
         // ---------- Más filtros (plegable)
         LinearLayout tMas = Ui.tarjeta(this, null, null);
         TextView cabMas = Ui.texto(this, "🔎 Más filtros  ▾", 17, Ui.TEXTO, true);
@@ -178,11 +200,27 @@ public class AlertaActivity extends Activity {
         cuerpoMas.addView(Ui.texto(this, "Aerolínea o indicativo", 15, Ui.TEXTO, false), Ui.ancho(14, this));
         indicativos = campo("Ej: IBE* (Iberia)  ·  !RYR* (todo menos Ryanair)", alerta.indicativos);
         cuerpoMas.addView(indicativos);
+        cuerpoMas.addView(Ui.texto(this, "Número de vuelo", 15, Ui.TEXTO, false), Ui.ancho(14, this));
+        vuelos = campo("Ej: IB3456  ·  FR82*", alerta.vuelos);
+        cuerpoMas.addView(vuelos);
+        cuerpoMas.addView(Ui.texto(this, "Squawk", 15, Ui.TEXTO, false), Ui.ancho(14, this));
+        squawks = campo("Ej: 7700, 7600, 7500", alerta.squawks);
+        squawks.setInputType(InputType.TYPE_CLASS_NUMBER);
+        cuerpoMas.addView(squawks);
+        android.text.TextWatcher alCambiar = new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence a, int b, int c, int d) {}
+            @Override public void onTextChanged(CharSequence a, int b, int c, int d) {}
+            @Override public void afterTextChanged(android.text.Editable e) { refrescarDistancias(); }
+        };
+        matriculas.addTextChangedListener(alCambiar);
+        indicativos.addTextChangedListener(alCambiar);
+        squawks.addTextChangedListener(alCambiar);
         cuerpoMas.addView(Ui.texto(this,
                 "Puedes poner varios separados por comas. El * vale por cualquier cosa y el ! delante excluye.",
                 12, Ui.TEXTO_SUAVE, false), Ui.ancho(6, this));
 
-        boolean hayMas = alerta.altMaxM > 0 || !alerta.matriculas.isEmpty() || !alerta.indicativos.isEmpty();
+        boolean hayMas = alerta.altMaxM > 0 || !alerta.matriculas.isEmpty() || !alerta.indicativos.isEmpty()
+                || !alerta.vuelos.isEmpty() || !alerta.squawks.isEmpty() || alerta.sinLimite();
         cuerpoMas.setVisibility(hayMas ? View.VISIBLE : View.GONE);
         cabMas.setText(hayMas ? "🔎 Más filtros  ▴" : "🔎 Más filtros  ▾");
         cabMas.setOnClickListener(v -> {
@@ -220,6 +258,8 @@ public class AlertaActivity extends Activity {
         refrescarAltitud();
         pintarChipsAeropuertos(alerta.origenes, chipsOrigen);
         pintarChipsAeropuertos(alerta.destinos, chipsDestino);
+        pintarChipsAeropuertos(alerta.excluirOrigenes, chipsExclOrigen);
+        pintarChipsAeropuertos(alerta.excluirDestinos, chipsExclDestino);
     }
 
     // ------------------------------------------------------------ piezas
@@ -285,13 +325,33 @@ public class AlertaActivity extends Activity {
         txtTipoAyuda.setText(ayuda);
     }
 
+    private void leerCamposTexto() {
+        if (matriculas != null) alerta.matriculas = matriculas.getText().toString().trim();
+        if (indicativos != null) alerta.indicativos = indicativos.getText().toString().trim();
+        if (vuelos != null) alerta.vuelos = vuelos.getText().toString().trim();
+        if (squawks != null) alerta.squawks = squawks.getText().toString().trim();
+    }
+
     private void refrescarDistancias() {
-        txtDistancia.setText("Hasta " + Alerta.km(alerta.radioKm));
+        leerCamposTexto();
+        if (alerta.sinLimite()) {
+            txtDistancia.setText("🌍 Sin límite");
+            boolean vale = !alerta.consultasGlobales().isEmpty();
+            txtAvisoLimite.setVisibility(View.VISIBLE);
+            txtAvisoLimite.setTextColor(vale ? Ui.TEXTO_SUAVE : Ui.ROJO);
+            txtAvisoLimite.setText(vale
+                    ? "Te avisará esté donde esté la aeronave, en todo el mundo."
+                    : "⚠️ Sin límite solo funciona con Emergencias o Militares, o con un squawk, una matrícula "
+                      + "o un indicativo concretos (en «Más filtros», sin * ni !).");
+        } else {
+            txtDistancia.setText("Hasta " + Alerta.km(alerta.radioKm));
+            txtAvisoLimite.setVisibility(View.GONE);
+        }
         barraMinimo.setVisibility(swMinimo.isChecked() ? View.VISIBLE : View.GONE);
         txtMinimo.setVisibility(swMinimo.isChecked() ? View.VISIBLE : View.GONE);
         if (swMinimo.isChecked()) {
             String t = "No avisar si está a menos de " + Alerta.km(alerta.distMinKm);
-            if (alerta.distMinKm >= alerta.radioKm) t += "  ⚠️ es mayor que la distancia máxima";
+            if (!alerta.sinLimite() && alerta.distMinKm >= alerta.radioKm) t += "  ⚠️ es mayor que la distancia máxima";
             txtMinimo.setText(t);
         }
     }
@@ -336,7 +396,8 @@ public class AlertaActivity extends Activity {
     private void pintarChipsAeropuertos(List<String> codigos, ViewGroup chips) {
         chips.removeAllViews();
         if (codigos.isEmpty()) {
-            chips.addView(Ui.texto(this, "Cualquier aeropuerto", 14, Ui.TEXTO_SUAVE, false));
+            boolean exclusion = chips == chipsExclOrigen || chips == chipsExclDestino;
+            chips.addView(Ui.texto(this, exclusion ? "Ninguno" : "Cualquier aeropuerto", 14, Ui.TEXTO_SUAVE, false));
             return;
         }
         for (String codigo : new ArrayList<>(codigos)) {
@@ -401,6 +462,48 @@ public class AlertaActivity extends Activity {
         }
     }
 
+    private void elegirAeropuertoCercano() {
+        android.location.Location yo = null;
+        try {
+            android.location.LocationManager lm = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+            for (String prov : lm.getProviders(true)) {
+                android.location.Location l = lm.getLastKnownLocation(prov);
+                if (l != null && (yo == null || l.getTime() > yo.getTime())) yo = l;
+            }
+        } catch (SecurityException ignored) {}
+        if (yo == null) {
+            Toast.makeText(this, "No sé dónde estás todavía. Empieza a vigilar una vez (para dar permiso de ubicación) y vuelve a probar.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        final double lat = yo.getLatitude(), lon = yo.getLongitude();
+        List<Aeropuertos.Aeropuerto> cerca = Aeropuertos.cercanos(this, lat, lon, 6, 100);
+        if (cerca.isEmpty()) {
+            Toast.makeText(this, "No hay aeropuertos con vuelos a menos de 100 km", Toast.LENGTH_LONG).show();
+            return;
+        }
+        String[] opciones = new String[cerca.size()];
+        for (int i = 0; i < cerca.size(); i++) {
+            Aeropuertos.Aeropuerto a = cerca.get(i);
+            opciones[i] = a.titulo() + "  ·  " + Alerta.km((float) Aeropuertos.distanciaKm(lat, lon, a.lat, a.lon));
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("¿Qué aeropuerto ignorar?")
+                .setItems(opciones, (d, i) -> {
+                    String codigo = cerca.get(i).iata;
+                    new AlertDialog.Builder(this)
+                            .setTitle(cerca.get(i).titulo())
+                            .setItems(new String[]{"Ignorar los que salen", "Ignorar los que llegan", "Ignorar ambos"}, (d2, j) -> {
+                                if (j != 1 && !alerta.excluirOrigenes.contains(codigo)) alerta.excluirOrigenes.add(codigo);
+                                if (j != 0 && !alerta.excluirDestinos.contains(codigo)) alerta.excluirDestinos.add(codigo);
+                                pintarChipsAeropuertos(alerta.excluirOrigenes, chipsExclOrigen);
+                                pintarChipsAeropuertos(alerta.excluirDestinos, chipsExclDestino);
+                            })
+                            .show();
+                })
+                .show();
+    }
+
     // ------------------------------------------------------------ guardar
 
     private void guardar() {
@@ -409,13 +512,17 @@ public class AlertaActivity extends Activity {
             Toast.makeText(this, "Ponle un nombre a la alerta", Toast.LENGTH_SHORT).show();
             return;
         }
-        if (alerta.distMinKm >= alerta.radioKm) {
+        leerCamposTexto();
+        if (alerta.sinLimite() && alerta.consultasGlobales().isEmpty()) {
+            Toast.makeText(this, "Para «sin límite» elige Emergencias o Militares, o pon un squawk, matrícula o indicativo concreto",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!alerta.sinLimite() && alerta.distMinKm >= alerta.radioKm) {
             Toast.makeText(this, "La distancia mínima tiene que ser menor que la máxima", Toast.LENGTH_LONG).show();
             return;
         }
         alerta.nombre = n;
-        alerta.matriculas = matriculas.getText().toString().trim();
-        alerta.indicativos = indicativos.getText().toString().trim();
         Alertas.guardarUna(this, alerta);
         Toast.makeText(this, "Alerta guardada", Toast.LENGTH_SHORT).show();
         setResult(RESULT_OK, new Intent());

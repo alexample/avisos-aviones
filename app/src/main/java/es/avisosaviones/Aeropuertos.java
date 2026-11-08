@@ -23,6 +23,7 @@ final class Aeropuertos {
         final String iata, icao, ciudad, nombre, pais;
         final String clave; // texto normalizado para buscar
         final boolean grande;
+        double lat = Double.NaN, lon = Double.NaN;
 
         Aeropuerto(String iata, String icao, String ciudad, String nombre, String pais, boolean grande) {
             this.iata = iata; this.icao = icao; this.ciudad = ciudad; this.nombre = nombre; this.pais = pais;
@@ -77,6 +78,9 @@ final class Aeropuertos {
                 if (p.length < 5 || p[0].length() != 3) continue;
                 boolean grande = p.length > 5 && "L".equals(p[5]);
                 Aeropuerto a = new Aeropuerto(p[0], p[1], p[2], p[3], p[4], grande);
+                if (p.length > 7) {
+                    try { a.lat = Double.parseDouble(p[6]); a.lon = Double.parseDouble(p[7]); } catch (Exception ignored) {}
+                }
                 lista.add(a);
                 porIata.put(a.iata, a);
             }
@@ -87,6 +91,21 @@ final class Aeropuertos {
     static Aeropuerto porCodigo(Context c, String iata) {
         todos(c);
         return porIata.get(iata == null ? "" : iata.toUpperCase(Locale.ROOT));
+    }
+
+    /** Aeropuertos más cercanos a un punto, ordenados por distancia (en km, en el array). */
+    static List<Aeropuerto> cercanos(Context c, double lat, double lon, int max, double radioMaxKm) {
+        List<Aeropuerto> l = new ArrayList<>();
+        for (Aeropuerto a : todos(c)) if (!Double.isNaN(a.lat) && distanciaKm(lat, lon, a.lat, a.lon) <= radioMaxKm) l.add(a);
+        Collections.sort(l, (x, y) -> Double.compare(distanciaKm(lat, lon, x.lat, x.lon), distanciaKm(lat, lon, y.lat, y.lon)));
+        return l.size() > max ? new ArrayList<>(l.subList(0, max)) : l;
+    }
+
+    static double distanciaKm(double la1, double lo1, double la2, double lo2) {
+        double r = 6371, dLa = Math.toRadians(la2 - la1), dLo = Math.toRadians(lo2 - lo1);
+        double h = Math.sin(dLa / 2) * Math.sin(dLa / 2)
+                + Math.cos(Math.toRadians(la1)) * Math.cos(Math.toRadians(la2)) * Math.sin(dLo / 2) * Math.sin(dLo / 2);
+        return 2 * r * Math.asin(Math.sqrt(h));
     }
 
     /** "Madrid (MAD)" si se conoce; si no, el código tal cual. */

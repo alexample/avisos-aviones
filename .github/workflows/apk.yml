@@ -42,7 +42,8 @@ jobs:
                       limpia = lambda s: (s or '').replace('|', ' ').strip()
                       out.append('|'.join([iata, limpia(r.get('icao_code') or r.get('gps_code')),
                                            limpia(r.get('municipality')), limpia(r.get('name')),
-                                           limpia(r.get('iso_country')), 'L' if tipo == 'large_airport' else 'M']))
+                                           limpia(r.get('iso_country')), 'L' if tipo == 'large_airport' else 'M',
+                                           limpia(r.get('latitude_deg')), limpia(r.get('longitude_deg'))]))
           open('app/src/main/assets/aeropuertos.txt', 'w', encoding='utf-8').write('\n'.join(out))
           print(len(out), 'aeropuertos')
           EOF

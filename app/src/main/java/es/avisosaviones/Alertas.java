@@ -79,7 +79,7 @@ final class Alertas {
         // Si tenía filtros de ruta/matrícula, se conservan en una alerta aparte
         String ori = Ajustes.fOrigen(c), des = Ajustes.fDestino(c);
         String mat = Ajustes.fMatriculas(c), ind = Ajustes.fIndicativos(c);
-        if (!ori.isEmpty() || !des.isEmpty() || !mat.isEmpty() || !ind.isEmpty()) {
+        if (!ori.isEmpty() || !des.isEmpty() || !mat.isEmpty() || !ind.isEmpty() || !Ajustes.fSquawk(c).isEmpty()) {
             Alerta f = new Alerta();
             f.nombre = "Mis filtros anteriores";
             f.radioKm = Math.max(encima.radioKm, p.getFloat(Ajustes.RADIO_EXT_KM, 50f));
@@ -88,6 +88,7 @@ final class Alertas {
             for (String s : des.toUpperCase().split("[,;\\s]+")) if (s.matches("[A-Z0-9]{3,4}")) f.destinos.add(s);
             f.matriculas = mat;
             f.indicativos = ind;
+            f.squawks = Ajustes.fSquawk(c);
             lista.add(f);
         }
 
