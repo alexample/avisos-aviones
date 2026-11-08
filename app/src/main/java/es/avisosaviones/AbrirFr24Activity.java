@@ -42,7 +42,12 @@ public class AbrirFr24Activity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         final String respaldo = getIntent().getStringExtra(EXTRA_URL);
-        final String matricula = limpiar(getIntent().getStringExtra(EXTRA_MATRICULA));
+        String m = limpiar(getIntent().getStringExtra(EXTRA_MATRICULA));
+        // Avisos antiguos solo traen el enlace de la ficha: sacar la matrícula de ahí
+        if (m.isEmpty() && respaldo != null && respaldo.contains("/data/aircraft/")) {
+            m = limpiar(respaldo.substring(respaldo.lastIndexOf('/') + 1));
+        }
+        final String matricula = m;
         final String indicativo = limpiar(getIntent().getStringExtra(EXTRA_INDICATIVO));
 
         if (matricula.isEmpty() && indicativo.isEmpty()) {
@@ -57,6 +62,10 @@ public class AbrirFr24Activity extends Activity {
         new Thread(() -> {
             String enDirecto = buscarVueloEnDirecto(indicativo, matricula);
             ui.post(() -> {
+                Toast.makeText(app, enDirecto != null
+                                ? "✅ Vuelo en directo encontrado"
+                                : "Ese vuelo ya no está en directo (" + ultimoMotivo + "). Abro la ficha.",
+                        Toast.LENGTH_LONG).show();
                 String url = enDirecto != null ? enDirecto : respaldo;
                 if (url != null) abrir(app, url);
                 finish();
@@ -68,9 +77,13 @@ public class AbrirFr24Activity extends Activity {
         return s == null ? "" : s.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9-]", "");
     }
 
+    /** Motivo del último fallo, para mostrarlo. */
+    static volatile String ultimoMotivo = "";
+
     /** Devuelve https://www.flightradar24.com/INDICATIVO/idvuelo o null. */
     static String buscarVueloEnDirecto(String indicativo, String matricula) {
-        for (String consulta : new String[]{indicativo, matricula}) {
+        ultimoMotivo = "sin datos";
+        for (String consulta : new String[]{matricula, indicativo}) {
             if (consulta == null || consulta.isEmpty()) continue;
             try {
                 String url = "https://www.flightradar24.com/v1/search/web/find?limit=10&query="
@@ -80,7 +93,9 @@ public class AbrirFr24Activity extends Activity {
                 c.setReadTimeout(5_000);
                 c.setRequestProperty("User-Agent", UA_NAVEGADOR);
                 c.setRequestProperty("Accept", "application/json");
-                if (c.getResponseCode() != 200) continue;
+                int code = c.getResponseCode();
+                if (code != 200) { ultimoMotivo = "FR24 respondió " + code; continue; }
+                ultimoMotivo = "no aparece en vivo";
                 StringBuilder sb = new StringBuilder();
                 try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
                     String linea;
@@ -108,7 +123,9 @@ public class AbrirFr24Activity extends Activity {
                 String cs = d == null ? "" : d.optString("callsign", "").trim();
                 if (cs.isEmpty()) cs = !indicativo.isEmpty() ? indicativo : matricula;
                 return "https://www.flightradar24.com/" + cs + "/" + id;
-            } catch (Exception ignored) {}
+            } catch (Exception ex) {
+                ultimoMotivo = "error: " + ex.getClass().getSimpleName();
+            }
         }
         return null;
     }
