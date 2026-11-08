@@ -13,6 +13,8 @@ Al instalar, Android te pedirá permitir "instalar apps de origen desconocido".
 2. Pulsa **Empezar a vigilar** y concede ubicación y notificaciones.
 3. Pulsa **Quitar ahorro de batería** para que Android no la duerma.
 
+El botón **📋 Historial de pasos** guarda cada aparato avisado (hora, nombre, modelo, matrícula, operador, distancia, altitud y velocidad); toca uno para abrirlo en Flightradar24.
+
 Mientras vigila verás una notificación fija con botón **Parar**. Cada aviso muestra
 indicativo, tipo, matrícula, distancia y altitud; al tocarlo se abre en Flightradar24 (app o web), y tiene un botón para verlo en airplanes.live.
 

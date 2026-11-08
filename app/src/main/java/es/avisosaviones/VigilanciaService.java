@@ -304,6 +304,23 @@ public class VigilanciaService extends Service {
                     a.optDouble("lat"), a.optDouble("lon"));
         }
 
+        try {
+            JSONObject e = new JSONObject();
+            e.put("ts", System.currentTimeMillis());
+            e.put("hex", hex);
+            e.put("nombre", nombre);
+            e.put("heli", heli);
+            e.put("modelo", !desc.isEmpty() ? desc : tipo);
+            e.put("matricula", matricula.equals(nombre) ? "" : matricula);
+            e.put("operador", operador);
+            e.put("dist_km", Math.round(distKm * 10) / 10.0);
+            e.put("alt_m", altM);
+            double nudos = a.optDouble("gs", Double.NaN);
+            if (!Double.isNaN(nudos)) e.put("vel_kmh", Math.round(nudos * 1.852));
+            e.put("url_fr24", urlFr24);
+            Registro.guardar(this, e);
+        } catch (Exception ignored) {}
+
         Intent verFr24 = new Intent(Intent.ACTION_VIEW, Uri.parse(urlFr24))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent piFr24 = PendingIntent.getActivity(this, idAviso * 2, verFr24,

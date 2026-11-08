@@ -103,6 +103,11 @@ public class MainActivity extends Activity {
         lp.topMargin = dp(12);
         col.addView(boton, lp);
 
+        Button historial = new Button(this);
+        historial.setText("📋 Historial de pasos");
+        historial.setOnClickListener(v -> startActivity(new Intent(this, HistorialActivity.class)));
+        col.addView(historial);
+
         Button bateria = new Button(this);
         bateria.setText("Quitar ahorro de batería (recomendado)");
         bateria.setOnClickListener(v -> pedirSinOptimizacionBateria());
