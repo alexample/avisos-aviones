@@ -279,16 +279,50 @@ public class VigilanciaService extends Service {
         String hex = a.optString("hex", "");
 
         String nombre = !indicativo.isEmpty() ? indicativo : (!matricula.isEmpty() ? matricula : hex.toUpperCase(Locale.ROOT));
-        String titulo = (heli ? "🚁 Helicóptero" : "✈️ Avión") + " encima: " + nombre;
+
+        boolean militar = (a.optInt("dbFlags", 0) & 1) != 0;
+        String squawk = a.optString("squawk", "").trim();
+        String emergencia = a.optString("emergency", "none");
+        String textoEmergencia = textoEmergencia(squawk, emergencia);
+
+        String titulo;
+        if (textoEmergencia != null) titulo = "🚨 " + textoEmergencia + ": " + nombre;
+        else if (militar) titulo = (heli ? "🚁🎖️ Helicóptero militar" : "✈️🎖️ Avión militar") + " encima: " + nombre;
+        else titulo = (heli ? "🚁 Helicóptero" : "✈️ Avión") + " encima: " + nombre;
+
+        String ruta = indicativo.isEmpty() ? "" :
+                obtenerRuta(indicativo, a.optDouble("lat"), a.optDouble("lon"));
+
+        double nudos = a.optDouble("gs", Double.NaN);
+        double rumbo = a.optDouble("track", a.optDouble("true_heading", Double.NaN));
+        double piesMin = a.optDouble("baro_rate", a.optDouble("geom_rate", Double.NaN));
 
         StringBuilder cuerpo = new StringBuilder();
-        if (!desc.isEmpty()) cuerpo.append(desc);
-        else if (!tipo.isEmpty()) cuerpo.append(tipo);
-        if (!matricula.isEmpty() && !matricula.equals(nombre)) cuerpo.append(cuerpo.length() > 0 ? " · " : "").append(matricula);
-        if (!operador.isEmpty()) cuerpo.append(cuerpo.length() > 0 ? " · " : "").append(operador);
-        if (cuerpo.length() > 0) cuerpo.append("\n");
-        cuerpo.append(String.format(Locale.getDefault(), "A %.1f km", distKm));
-        if (altM >= 0) cuerpo.append(String.format(Locale.getDefault(), " · %,d m de altitud", altM));
+        // Línea 1: qué es
+        StringBuilder l1 = new StringBuilder();
+        unir(l1, !desc.isEmpty() ? desc : tipo);
+        if (!matricula.equals(nombre)) unir(l1, matricula);
+        unir(l1, operador);
+        if (l1.length() > 0) cuerpo.append(l1).append('\n');
+        // Línea 2: ruta
+        if (!ruta.isEmpty()) cuerpo.append("🛫 ").append(ruta).append('\n');
+        // Línea 3: dónde y cómo vuela
+        StringBuilder l3 = new StringBuilder();
+        unir(l3, String.format(Locale.getDefault(), "A %.1f km", distKm));
+        if (altM >= 0) unir(l3, String.format(Locale.getDefault(), "%,d m", altM));
+        if (!Double.isNaN(nudos)) unir(l3, String.format(Locale.getDefault(), "%.0f km/h", nudos * 1.852));
+        cuerpo.append(l3);
+        // Línea 4: rumbo, subida/bajada, squawk
+        StringBuilder l4 = new StringBuilder();
+        if (!Double.isNaN(rumbo)) unir(l4, "Rumbo " + puntoCardinal(rumbo) + String.format(Locale.US, " (%.0f°)", rumbo));
+        if (!Double.isNaN(piesMin)) {
+            int mMin = (int) Math.round(piesMin * 0.3048);
+            if (mMin > 150) unir(l4, "↗ subiendo " + mMin + " m/min");
+            else if (mMin < -150) unir(l4, "↘ bajando " + (-mMin) + " m/min");
+            else unir(l4, "→ nivelado");
+        }
+        if (!squawk.isEmpty()) unir(l4, "Squawk " + squawk);
+        if (l4.length() > 0) cuerpo.append('\n').append(l4);
 
         // Flightradar24: por indicativo si lo hay, si no por matrícula. Si tienes la app
         // de FR24 instalada, Android abre el enlace directamente en ella.
@@ -315,8 +349,11 @@ public class VigilanciaService extends Service {
             e.put("operador", operador);
             e.put("dist_km", Math.round(distKm * 10) / 10.0);
             e.put("alt_m", altM);
-            double nudos = a.optDouble("gs", Double.NaN);
             if (!Double.isNaN(nudos)) e.put("vel_kmh", Math.round(nudos * 1.852));
+            e.put("ruta", ruta);
+            e.put("militar", militar);
+            if (!Double.isNaN(rumbo)) e.put("rumbo", puntoCardinal(rumbo));
+            if (textoEmergencia != null) e.put("emergencia", textoEmergencia);
             e.put("url_fr24", urlFr24);
             Registro.guardar(this, e);
         } catch (Exception ignored) {}
@@ -345,6 +382,94 @@ public class VigilanciaService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.notify(idAviso++, n);
         if (idAviso > 10_000) idAviso = 100;
+    }
+
+    // ---------------------------------------------------------------- datos extra
+
+    /** Indicativo → "Madrid (MAD) → Barcelona (BCN)". Cadena vacía = desconocida. */
+    private final Map<String, String> cacheRutas = new HashMap<>();
+
+    private String obtenerRuta(String indicativo, double lat, double lon) {
+        String clave = indicativo.trim().toUpperCase(Locale.ROOT);
+        if (cacheRutas.containsKey(clave)) return cacheRutas.get(clave);
+        String ruta = "";
+        try {
+            JSONObject avion = new JSONObject();
+            avion.put("callsign", clave);
+            avion.put("lat", lat);
+            avion.put("lng", lon);
+            JSONObject peticion = new JSONObject();
+            peticion.put("planes", new JSONArray().put(avion));
+
+            HttpURLConnection c = (HttpURLConnection) new URL("https://api.adsb.lol/api/0/routeset").openConnection();
+            c.setConnectTimeout(6_000);
+            c.setReadTimeout(8_000);
+            c.setDoOutput(true);
+            c.setRequestMethod("POST");
+            c.setRequestProperty("Content-Type", "application/json");
+            c.setRequestProperty("User-Agent", "AvisosAviones/1.0 (Android)");
+            try (java.io.OutputStream os = c.getOutputStream()) {
+                os.write(peticion.toString().getBytes("UTF-8"));
+            }
+            if (c.getResponseCode() == 200) {
+                StringBuilder sb = new StringBuilder();
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
+                    String linea;
+                    while ((linea = r.readLine()) != null) sb.append(linea);
+                }
+                JSONArray res = new JSONArray(sb.toString());
+                if (res.length() > 0) ruta = formatearRuta(res.getJSONObject(0));
+            }
+        } catch (Exception ignored) {}
+        if (cacheRutas.size() > 500) cacheRutas.clear();
+        cacheRutas.put(clave, ruta);
+        return ruta;
+    }
+
+    private static String formatearRuta(JSONObject r) {
+        Object plausible = r.opt("plausible");
+        if (Boolean.FALSE.equals(plausible) || Integer.valueOf(0).equals(plausible)) return "";
+        JSONArray aeropuertos = r.optJSONArray("_airports");
+        if (aeropuertos != null && aeropuertos.length() >= 2) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < aeropuertos.length(); i++) {
+                JSONObject ap = aeropuertos.optJSONObject(i);
+                if (ap == null) continue;
+                String lugar = ap.optString("location", "").trim();
+                if (lugar.isEmpty()) lugar = ap.optString("name", "").trim();
+                String codigo = ap.optString("iata", "").trim();
+                if (codigo.isEmpty()) codigo = ap.optString("icao", "").trim();
+                if (sb.length() > 0) sb.append(" → ");
+                sb.append(lugar.isEmpty() ? codigo : lugar + (codigo.isEmpty() ? "" : " (" + codigo + ")"));
+            }
+            return sb.toString();
+        }
+        String codigos = r.optString("_airport_codes_iata", "");
+        if (codigos.isEmpty() || "unknown".equalsIgnoreCase(codigos)) codigos = r.optString("airport_codes", "");
+        if (codigos.isEmpty() || "unknown".equalsIgnoreCase(codigos)) return "";
+        return codigos.replace("-", " → ");
+    }
+
+    private static String puntoCardinal(double grados) {
+        String[] p = {"N", "NE", "E", "SE", "S", "SO", "O", "NO"};
+        int i = (int) Math.round(((grados % 360) + 360) % 360 / 45.0) % 8;
+        return p[i];
+    }
+
+    private static String textoEmergencia(String squawk, String emergencia) {
+        if ("7700".equals(squawk)) return "EMERGENCIA (7700)";
+        if ("7600".equals(squawk)) return "Fallo de radio (7600)";
+        if ("7500".equals(squawk)) return "Interferencia ilícita (7500)";
+        if (emergencia != null && !emergencia.isEmpty() && !"none".equalsIgnoreCase(emergencia)) {
+            return "EMERGENCIA (" + emergencia + ")";
+        }
+        return null;
+    }
+
+    private static void unir(StringBuilder sb, String s) {
+        if (s == null || s.trim().isEmpty()) return;
+        if (sb.length() > 0) sb.append(" · ");
+        sb.append(s.trim());
     }
 
     private void crearCanales() {

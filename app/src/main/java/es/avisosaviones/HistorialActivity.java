@@ -110,12 +110,18 @@ public class HistorialActivity extends Activity {
             if (alt >= 0) linea3.append(String.format(Locale.getDefault(), " · %,d m", alt));
             double vel = e.optDouble("vel_kmh", -1);
             if (vel >= 0) linea3.append(String.format(Locale.getDefault(), " · %.0f km/h", vel));
+            String rumbo = e.optString("rumbo");
+            if (!rumbo.isEmpty()) linea3.append(" · rumbo ").append(rumbo);
             String ruta = e.optString("ruta");
-            if (!ruta.isEmpty()) linea3.append(" · ").append(ruta);
+            String emerg = e.optString("emergencia");
 
+            String icono = (heli ? "🚁" : "✈️") + (e.optBoolean("militar") ? "🎖️" : "")
+                    + (emerg.isEmpty() ? "" : "🚨");
             TextView t = new TextView(this);
-            t.setText((heli ? "🚁 " : "✈️ ") + cuando + "  " + e.optString("nombre")
+            t.setText(icono + " " + cuando + "  " + e.optString("nombre")
+                    + (emerg.isEmpty() ? "" : "  " + emerg)
                     + (linea2.length() > 0 ? "\n" + linea2 : "")
+                    + (ruta.isEmpty() ? "" : "\n🛫 " + ruta)
                     + "\n" + linea3);
             t.setTextSize(15);
             t.setPadding(dp(12), dp(10), dp(12), dp(10));
