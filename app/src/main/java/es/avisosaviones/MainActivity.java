@@ -153,6 +153,7 @@ public class MainActivity extends Activity {
         sv.addView(col);
         raiz.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(raiz);
+        Ui.ajustarABordes(raiz, cab);
         mostrarEstado(null);
     }
 

@@ -72,6 +72,7 @@ public class HistorialActivity extends Activity {
         sv.setFillViewport(true);
         sv.addView(col);
         setContentView(sv);
+        Ui.ajustarABordes(sv, col);
     }
 
     @Override

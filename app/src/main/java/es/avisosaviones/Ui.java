@@ -27,6 +27,32 @@ final class Ui {
 
     private Ui() {}
 
+    /**
+     * Android 15 dibuja la app detrás de la barra de estado y del teclado.
+     * Esto mete la barra de estado dentro de la cabecera ({@code arriba}) y
+     * encoge {@code raiz} por abajo lo que ocupe el teclado o la barra de navegación.
+     */
+    static void ajustarABordes(View raiz, View arriba) {
+        final int arribaPt = arriba.getPaddingTop();
+        final int raizPb = raiz.getPaddingBottom();
+        raiz.setOnApplyWindowInsetsListener((v, in) -> {
+            int top, bottom;
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets barras = in.getInsets(android.view.WindowInsets.Type.systemBars());
+                android.graphics.Insets teclado = in.getInsets(android.view.WindowInsets.Type.ime());
+                top = barras.top;
+                bottom = Math.max(barras.bottom, teclado.bottom);
+            } else {
+                top = in.getSystemWindowInsetTop();
+                bottom = in.getSystemWindowInsetBottom();
+            }
+            arriba.setPadding(arriba.getPaddingLeft(), arribaPt + top, arriba.getPaddingRight(), arriba.getPaddingBottom());
+            raiz.setPadding(raiz.getPaddingLeft(), raiz.getPaddingTop(), raiz.getPaddingRight(), raizPb + bottom);
+            return in;
+        });
+        raiz.requestApplyInsets();
+    }
+
     static int dp(Context c, float v) {
         return Math.round(v * c.getResources().getDisplayMetrics().density);
     }

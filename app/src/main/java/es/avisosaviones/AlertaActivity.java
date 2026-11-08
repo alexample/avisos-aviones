@@ -47,6 +47,8 @@ public class AlertaActivity extends Activity {
     private Switch swMinimo;
     private final List<TextView> chipsTipo = new ArrayList<>();
     private ViewGroup chipsOrigen, chipsDestino;
+    private ScrollView scroll;
+    private LinearLayout contenido;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -81,6 +83,7 @@ public class AlertaActivity extends Activity {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(14), dp(6), dp(14), dp(24));
+        contenido = col;
 
         // ---------- Nombre
         LinearLayout tNombre = Ui.tarjeta(this, "Nombre", null);
@@ -206,9 +209,11 @@ public class AlertaActivity extends Activity {
         }
 
         ScrollView sv = new ScrollView(this);
+        scroll = sv;
         sv.addView(col);
         raiz.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(raiz);
+        Ui.ajustarABordes(raiz, barra);
 
         refrescarTipo();
         refrescarDistancias();
@@ -238,7 +243,21 @@ public class AlertaActivity extends Activity {
         e.setText(valor);
         e.setSingleLine(true);
         e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        subirAlEscribir(e);
         return e;
+    }
+
+    /** Sube el campo para que quede visible encima del teclado (y deje sitio a la lista). */
+    private void subirAlEscribir(View campo) {
+        campo.setOnFocusChangeListener((v, foco) -> { if (foco) v.postDelayed(() -> llevarArriba(v), 350); });
+        campo.setOnClickListener(v -> v.postDelayed(() -> llevarArriba(v), 350));
+    }
+
+    private void llevarArriba(View v) {
+        android.graphics.Rect r = new android.graphics.Rect();
+        v.getDrawingRect(r);
+        contenido.offsetDescendantRectToMyCoords(v, r);
+        scroll.smoothScrollTo(0, Math.max(0, r.top - dp(90)));
     }
 
     private static int indiceCercano(float[] valores, float v) {
@@ -292,6 +311,7 @@ public class AlertaActivity extends Activity {
         ac.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         ac.setImeOptions(EditorInfo.IME_ACTION_DONE);
         AdaptadorAeropuertos ad = new AdaptadorAeropuertos(this);
+        subirAlEscribir(ac);
         ac.setAdapter(ad);
         ac.setOnItemClickListener((p, v, pos, id) -> {
             Aeropuertos.Aeropuerto a = ad.getItem(pos);
