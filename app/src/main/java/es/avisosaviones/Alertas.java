@@ -72,7 +72,7 @@ final class Alertas {
         Alerta encima = new Alerta();
         encima.nombre = "Encima de mí";
         encima.radioKm = p.getFloat(Ajustes.RADIO_KM, 2f);
-        encima.tipo = p.getBoolean(Ajustes.SOLO_HELICOPTEROS, false) ? Alerta.HELICOPTEROS : Alerta.TODO;
+        if (p.getBoolean(Ajustes.SOLO_HELICOPTEROS, false)) encima.clases.add(Tipos.HELI);
         if (Ajustes.usa(c, Ajustes.ALTITUD_MAX_M)) encima.altMaxM = p.getInt(Ajustes.ALTITUD_MAX_M, 0);
         lista.add(encima);
 
@@ -94,14 +94,14 @@ final class Alertas {
 
         Alerta emerg = new Alerta();
         emerg.nombre = "Emergencias en la zona";
-        emerg.tipo = Alerta.EMERGENCIAS;
+        emerg.soloEmergencia = true;
         emerg.radioKm = 100;
         emerg.activa = false;
         lista.add(emerg);
 
         Alerta heli = new Alerta();
         heli.nombre = "Helicópteros cerca";
-        heli.tipo = Alerta.HELICOPTEROS;
+        heli.clases.add(Tipos.HELI);
         heli.radioKm = 10;
         heli.activa = false;
         lista.add(heli);

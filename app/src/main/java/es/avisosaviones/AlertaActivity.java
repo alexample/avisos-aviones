@@ -35,8 +35,6 @@ public class AlertaActivity extends Activity {
     private static final float[] DISTANCIAS = {0.5f, 1, 2, 3, 5, 7, 10, 15, 20, 30, 40, 50, 75, 100, 150, 200, 250};
     private static final float[] MINIMOS = {0.5f, 1, 2, 3, 5, 10, 20, 50};
     private static final int[] ALTITUDES = {0, 300, 500, 1000, 1500, 2000, 3000, 5000, 8000};
-    private static final String[] TIPOS = {Alerta.TODO, Alerta.AVIONES, Alerta.HELICOPTEROS, Alerta.MILITARES, Alerta.EMERGENCIAS};
-    private static final String[] TIPOS_TXT = {"✈️🚁 Todo", "✈️ Aviones", "🚁 Helicópteros", "🎖️ Militares", "🚨 Emergencias"};
 
     private Alerta alerta;
     private boolean nueva;
@@ -48,6 +46,8 @@ public class AlertaActivity extends Activity {
     private SeekBar barraDistancia, barraMinimo, barraAltitud;
     private Switch swMinimo;
     private final List<TextView> chipsTipo = new ArrayList<>();
+    private TextView chipMilitar, chipEmergencia;
+    private ViewGroup chipsModelo;
     private ViewGroup chipsOrigen, chipsDestino;
     private ScrollView scroll;
     private LinearLayout contenido;
@@ -97,20 +97,46 @@ public class AlertaActivity extends Activity {
         tNombre.addView(nombre);
         col.addView(tNombre, Ui.ancho(12, this));
 
-        // ---------- Tipo
-        LinearLayout tTipo = Ui.tarjeta(this, "¿De qué quieres que te avise?", null);
+        // ---------- Qué
+        LinearLayout tTipo = Ui.tarjeta(this, "¿De qué quieres que te avise?",
+                "Marca uno o varios. Si no marcas ninguno, de todo.");
         ViewGroup filaTipo = Ui.filaChips(this);
-        for (int i = 0; i < TIPOS.length; i++) {
-            final String t = TIPOS[i];
-            TextView ch = Ui.chip(this, TIPOS_TXT[i]);
-            ch.setOnClickListener(v -> { alerta.tipo = t; refrescarTipo(); });
+        for (int i = 0; i < Tipos.CLASES.length; i++) {
+            final String c = Tipos.CLASES[i];
+            TextView ch = Ui.chip(this, Tipos.CLASES_TXT[i]);
+            ch.setOnClickListener(v -> {
+                if (alerta.clases.contains(c)) alerta.clases.remove(c); else alerta.clases.add(c);
+                refrescarTipo();
+            });
             chipsTipo.add(ch);
             filaTipo.addView(ch);
         }
         tTipo.addView(filaTipo, Ui.ancho(8, this));
+
+        tTipo.addView(Ui.texto(this, "Y además, solo si es…", 14, Ui.TEXTO, true), Ui.ancho(14, this));
+        ViewGroup filaSolo = Ui.filaChips(this);
+        chipMilitar = Ui.chip(this, "🎖️ Militar");
+        chipMilitar.setOnClickListener(v -> { alerta.soloMilitar = !alerta.soloMilitar; refrescarTipo(); refrescarDistancias(); });
+        chipEmergencia = Ui.chip(this, "🚨 Emergencia");
+        chipEmergencia.setOnClickListener(v -> { alerta.soloEmergencia = !alerta.soloEmergencia; refrescarTipo(); refrescarDistancias(); });
+        filaSolo.addView(chipMilitar);
+        filaSolo.addView(chipEmergencia);
+        tTipo.addView(filaSolo, Ui.ancho(8, this));
         txtTipoAyuda = Ui.texto(this, "", 13, Ui.TEXTO_SUAVE, false);
-        tTipo.addView(txtTipoAyuda, Ui.ancho(8, this));
+        tTipo.addView(txtTipoAyuda, Ui.ancho(10, this));
         col.addView(tTipo, Ui.ancho(12, this));
+
+        // ---------- Modelo
+        LinearLayout tModelo = Ui.tarjeta(this, "🔧 Modelo",
+                "Opcional. Escribe un modelo o fabricante (A320, 737, Cessna, Robinson…) y elígelo.");
+        chipsModelo = Ui.filaChips(this);
+        tModelo.addView(chipsModelo, Ui.ancho(6, this));
+        tModelo.addView(buscadorModelo());
+        if (Tipos.todos(this).isEmpty()) {
+            tModelo.addView(Ui.texto(this, "⚠️ No se ha cargado la lista de modelos; escribe el código OACI (A20N, B738…) y pulsa Intro.",
+                    13, Ui.ROJO, false), Ui.ancho(8, this));
+        }
+        col.addView(tModelo, Ui.ancho(12, this));
 
         // ---------- Distancia
         LinearLayout tDist = Ui.tarjeta(this, "📍 ¿A qué distancia de ti?", null);
@@ -256,6 +282,7 @@ public class AlertaActivity extends Activity {
         refrescarTipo();
         refrescarDistancias();
         refrescarAltitud();
+        pintarChipsModelos();
         pintarChipsAeropuertos(alerta.origenes, chipsOrigen);
         pintarChipsAeropuertos(alerta.destinos, chipsDestino);
         pintarChipsAeropuertos(alerta.excluirOrigenes, chipsExclOrigen);
@@ -313,16 +340,111 @@ public class AlertaActivity extends Activity {
     }
 
     private void refrescarTipo() {
-        for (int i = 0; i < TIPOS.length; i++) Ui.marcarChip(this, chipsTipo.get(i), TIPOS[i].equals(alerta.tipo));
-        String ayuda;
-        switch (alerta.tipo) {
-            case Alerta.AVIONES: ayuda = "Solo aviones; no avisa de helicópteros."; break;
-            case Alerta.HELICOPTEROS: ayuda = "Solo helicópteros que emitan su posición (muchos militares o policiales no lo hacen)."; break;
-            case Alerta.MILITARES: ayuda = "Aeronaves marcadas como militares en la base de datos."; break;
-            case Alerta.EMERGENCIAS: ayuda = "Aeronaves que declaran emergencia (squawk 7700), fallo de radio (7600) o secuestro (7500)."; break;
-            default: ayuda = "Cualquier avión o helicóptero.";
+        for (int i = 0; i < Tipos.CLASES.length; i++)
+            Ui.marcarChip(this, chipsTipo.get(i), alerta.clases.contains(Tipos.CLASES[i]));
+        Ui.marcarChip(this, chipMilitar, alerta.soloMilitar);
+        Ui.marcarChip(this, chipEmergencia, alerta.soloEmergencia);
+        StringBuilder sb = new StringBuilder("Te avisará de: ").append(alerta.textoQue().toLowerCase(Locale.getDefault())).append('.');
+        if (alerta.clases.contains(Tipos.HELI)) sb.append("\nOjo: muchos helicópteros militares o policiales no emiten su posición.");
+        if (alerta.soloEmergencia) sb.append("\nEmergencia = squawk 7700 (emergencia), 7600 (fallo de radio) o 7500 (secuestro).");
+        if (alerta.soloMilitar) sb.append("\nMilitar = marcado así en la base de datos de airplanes.live.");
+        txtTipoAyuda.setText(sb.toString());
+    }
+
+    // ------------------------------------------------------------ modelos
+
+    private AutoCompleteTextView buscadorModelo() {
+        AutoCompleteTextView ac = new AutoCompleteTextView(this);
+        ac.setHint("🔍  Ej: A320, 737, Cessna 172…");
+        ac.setSingleLine(true);
+        ac.setThreshold(1);
+        ac.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        ac.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        subirAlEscribir(ac);
+        AdaptadorModelos ad = new AdaptadorModelos(this);
+        ac.setAdapter(ad);
+        ac.setOnItemClickListener((p, v, pos, id) -> {
+            String codigo = ad.getItem(pos).codigo;
+            if (!alerta.modelos.contains(codigo)) alerta.modelos.add(codigo);
+            ac.setText("");
+            pintarChipsModelos();
+        });
+        ac.setOnEditorActionListener((v, accion, ev) -> {
+            String t = ac.getText().toString().trim().toUpperCase(Locale.ROOT);
+            if (t.matches("[A-Z0-9*?]{2,4}")) {
+                if (!alerta.modelos.contains(t)) alerta.modelos.add(t);
+                ac.setText("");
+                pintarChipsModelos();
+                return true;
+            }
+            return false;
+        });
+        return ac;
+    }
+
+    private void pintarChipsModelos() {
+        chipsModelo.removeAllViews();
+        if (alerta.modelos.isEmpty()) {
+            chipsModelo.addView(Ui.texto(this, "Cualquier modelo", 14, Ui.TEXTO_SUAVE, false));
+        } else {
+            for (String codigo : new ArrayList<>(alerta.modelos)) {
+                TextView ch = Ui.chip(this, Tipos.etiqueta(this, codigo) + "   ✕");
+                Ui.marcarChip(this, ch, true);
+                ch.setOnClickListener(v -> { alerta.modelos.remove(codigo); pintarChipsModelos(); });
+                chipsModelo.addView(ch);
+            }
         }
-        txtTipoAyuda.setText(ayuda);
+        refrescarDistancias();
+    }
+
+    /** Sugerencias de modelos mientras se escribe. */
+    private static final class AdaptadorModelos extends BaseAdapter implements Filterable {
+        private final Context c;
+        private List<Tipos.Tipo> datos = new ArrayList<>();
+        AdaptadorModelos(Context c) { this.c = c; }
+        @Override public int getCount() { return datos.size(); }
+        @Override public Tipos.Tipo getItem(int i) { return datos.get(i); }
+        @Override public long getItemId(int i) { return i; }
+        @Override public View getView(int i, View reciclada, ViewGroup padre) {
+            LinearLayout fila;
+            TextView t1, t2;
+            if (reciclada instanceof LinearLayout) {
+                fila = (LinearLayout) reciclada;
+                t1 = (TextView) fila.getChildAt(0);
+                t2 = (TextView) fila.getChildAt(1);
+            } else {
+                fila = new LinearLayout(c);
+                fila.setOrientation(LinearLayout.VERTICAL);
+                fila.setPadding(Ui.dp(c, 16), Ui.dp(c, 10), Ui.dp(c, 16), Ui.dp(c, 10));
+                t1 = Ui.texto(c, "", 16, Ui.TEXTO, true);
+                t2 = Ui.texto(c, "", 13, Ui.TEXTO_SUAVE, false);
+                fila.addView(t1);
+                fila.addView(t2);
+            }
+            Tipos.Tipo t = datos.get(i);
+            t1.setText(t.titulo());
+            t2.setText(t.detalle());
+            return fila;
+        }
+        @Override public Filter getFilter() {
+            return new Filter() {
+                @Override protected FilterResults performFiltering(CharSequence q) {
+                    FilterResults r = new FilterResults();
+                    List<Tipos.Tipo> l = q == null ? new ArrayList<>() : Tipos.buscar(c, q.toString(), 30);
+                    r.values = l;
+                    r.count = l.size();
+                    return r;
+                }
+                @SuppressWarnings("unchecked")
+                @Override protected void publishResults(CharSequence q, FilterResults r) {
+                    datos = r.values != null ? (List<Tipos.Tipo>) r.values : new ArrayList<>();
+                    notifyDataSetChanged();
+                }
+                @Override public CharSequence convertResultToString(Object o) {
+                    return o instanceof Tipos.Tipo ? ((Tipos.Tipo) o).codigo : "";
+                }
+            };
+        }
     }
 
     private void leerCamposTexto() {
@@ -341,8 +463,8 @@ public class AlertaActivity extends Activity {
             txtAvisoLimite.setTextColor(vale ? Ui.TEXTO_SUAVE : Ui.ROJO);
             txtAvisoLimite.setText(vale
                     ? "Te avisará esté donde esté la aeronave, en todo el mundo."
-                    : "⚠️ Sin límite solo funciona con Emergencias o Militares, o con un squawk, una matrícula "
-                      + "o un indicativo concretos (en «Más filtros», sin * ni !).");
+                    : "⚠️ Sin límite solo funciona si marcas Militar o Emergencia, eliges un modelo concreto, "
+                      + "o pones un squawk, matrícula o indicativo exactos (en «Más filtros», sin * ni !).");
         } else {
             txtDistancia.setText("Hasta " + Alerta.km(alerta.radioKm));
             txtAvisoLimite.setVisibility(View.GONE);
@@ -514,7 +636,7 @@ public class AlertaActivity extends Activity {
         }
         leerCamposTexto();
         if (alerta.sinLimite() && alerta.consultasGlobales().isEmpty()) {
-            Toast.makeText(this, "Para «sin límite» elige Emergencias o Militares, o pon un squawk, matrícula o indicativo concreto",
+            Toast.makeText(this, "Para «sin límite» marca Militar o Emergencia, elige un modelo, o pon un squawk, matrícula o indicativo exactos",
                     Toast.LENGTH_LONG).show();
             return;
         }

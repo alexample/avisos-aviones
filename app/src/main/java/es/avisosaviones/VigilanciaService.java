@@ -225,7 +225,9 @@ public class VigilanciaService extends Service {
                 masCerca = Math.min(masCerca, av.distKm);
             }
             av.altM = altitudMetros(a);
-            av.heli = esHelicoptero(a);
+            av.tipoCodigo = a.optString("t", "").trim().toUpperCase(Locale.ROOT);
+            av.clase = Tipos.clase(this, a.optString("category", ""), av.tipoCodigo);
+            av.heli = Tipos.HELI.equals(av.clase) || esHelicoptero(a);
             av.militar = (a.optInt("dbFlags", 0) & 1) != 0;
             av.emergencia = textoEmergencia(a.optString("squawk", "").trim(), a.optString("emergency", "none")) != null;
             av.matricula = a.optString("r", "");
@@ -392,6 +394,10 @@ public class VigilanciaService extends Service {
         String matricula = a.optString("r", "").trim();
         String tipo = a.optString("t", "").trim();
         String desc = a.optString("desc", "").trim();
+        if (desc.isEmpty()) {
+            Tipos.Tipo info = Tipos.buscarCodigo(this, tipo);
+            if (info != null) desc = info.nombre;
+        }
         String operador = a.optString("ownOp", "").trim();
         String hex = a.optString("hex", "");
 

@@ -5,3 +5,4 @@ local.properties
 *.iml
 .idea/
 app/src/main/assets/aeropuertos.txt
+app/src/main/assets/tipos.txt

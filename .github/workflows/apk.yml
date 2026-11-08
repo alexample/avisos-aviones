@@ -48,6 +48,24 @@ jobs:
           print(len(out), 'aeropuertos')
           EOF
 
+      - name: Lista de modelos de aeronave (tar1090-db)
+        run: |
+          curl -sSfL -m 120 https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/icao_aircraft_types2.js -o /tmp/tipos.gz || true
+          python3 - <<'EOF'
+          import gzip, json, os
+          out = []
+          try:
+              d = json.loads(gzip.open('/tmp/tipos.gz').read().decode('utf-8'))
+              for k, v in sorted(d.items()):
+                  if not isinstance(v, list) or len(v) < 3: continue
+                  limpia = lambda s: (s or '').replace('|', ' ').strip()
+                  out.append('|'.join([k.strip().upper(), limpia(v[0]), limpia(v[1]), limpia(v[2])]))
+          except Exception as e:
+              print('sin modelos:', e)
+          open('app/src/main/assets/tipos.txt', 'w', encoding='utf-8').write('\n'.join(out))
+          print(len(out), 'modelos')
+          EOF
+
       - name: Compilar
         run: gradle --no-daemon assembleRelease
 
