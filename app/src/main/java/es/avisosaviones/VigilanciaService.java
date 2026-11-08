@@ -203,6 +203,7 @@ public class VigilanciaService extends Service {
             globales.addAll(al.consultasGlobales());
             // Sin límite + servicio: buscar por Mode S las aeronaves etiquetadas
             if (al.sinLimite() && !al.servicios.isEmpty()) {
+                for (String r : Servicios.matriculasDe(this, al.servicios)) globales.add("reg/" + Servicios.conGuion(r));
                 List<String> hexes = Servicios.hexDe(this, al.servicios);
                 for (int i = 0; i < hexes.size(); i += 20) {
                     globales.add("hex/" + String.join(",", hexes.subList(i, Math.min(hexes.size(), i + 20))));

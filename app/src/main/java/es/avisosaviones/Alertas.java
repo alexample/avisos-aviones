@@ -27,6 +27,11 @@ final class Alertas {
             JSONArray arr = new JSONArray(json);
             for (int i = 0; i < arr.length(); i++) lista.add(Alerta.deJson(arr.getJSONObject(i)));
         } catch (Exception ignored) {}
+        if (!p.getBoolean("semilla_alerta_pegasus_v1", false)) {
+            lista.add(alertaPegasus());
+            p.edit().putBoolean("semilla_alerta_pegasus_v1", true).apply();
+            guardar(c, lista);
+        }
         return lista;
     }
 
@@ -64,6 +69,16 @@ final class Alertas {
         return max;
     }
 
+    /** Alerta lista para usar con los helicópteros Pegasus de la DGT. */
+    private static Alerta alertaPegasus() {
+        Alerta a = new Alerta();
+        a.nombre = "Pegasus DGT cerca";
+        a.servicios.add("dgt");
+        a.radioKm = 30;
+        a.activa = true;
+        return a;
+    }
+
     /** Primera vez con la versión de alertas: convierte los ajustes de antes en alertas. */
     private static List<Alerta> migrarDesdeAjustesAntiguos(Context c) {
         SharedPreferences p = Ajustes.prefs(c);
@@ -98,6 +113,9 @@ final class Alertas {
         emerg.radioKm = 100;
         emerg.activa = false;
         lista.add(emerg);
+
+        lista.add(alertaPegasus());
+        p.edit().putBoolean("semilla_alerta_pegasus_v1", true).apply();
 
         Alerta heli = new Alerta();
         heli.nombre = "Helicópteros cerca";

@@ -20,7 +20,30 @@ final class Servicios {
     static final String[] TXT = {"🚦 DGT / Pegasus", "🚑 Sanitario / 112", "👮 Policía / G. Civil",
             "🔥 Incendios", "⚓ Salvamento", "🏷️ Otro"};
 
+    /** Helicópteros de la DGT (Pegasus) aportados por el usuario: EC135 y AS355. */
+    private static final String[] DGT_PEGASUS = {
+            "EC-LBD", "EC-LDF",                                    // EC135
+            "EC-JMK", "EC-KXU", "EC-MDO", "EC-MHU", "EC-IXI",      // AS355
+            "EC-IBN", "EC-ISB", "EC-HCE", "EC-HZY", "EC-DZX",
+    };
+    private static final String SEMILLA = "semilla_dgt_v1";
+
     private Servicios() {}
+
+    /** Añade una sola vez las matrículas conocidas (sin pisar lo que haya cambiado el usuario). */
+    private static void sembrar(Context c, JSONObject o) {
+        if (Ajustes.prefs(c).getBoolean(SEMILLA, false)) return;
+        try {
+            for (String r : DGT_PEGASUS) if (!o.has("R:" + reg(r))) o.put("R:" + reg(r), "dgt");
+        } catch (Exception ignored) {}
+        Ajustes.prefs(c).edit().putString(CLAVE, o.toString()).putBoolean(SEMILLA, true).apply();
+    }
+
+    /** "ECLBD" → "EC-LBD" (formato español); otras se dejan igual. */
+    static String conGuion(String r) {
+        if (r.matches("EC[A-Z]{3}")) return "EC-" + r.substring(2);
+        return r;
+    }
 
     static String legible(String id) {
         for (int i = 0; i < IDS.length; i++) if (IDS[i].equals(id)) return TXT[i];
@@ -37,8 +60,11 @@ final class Servicios {
     }
 
     private static JSONObject leer(Context c) {
-        try { return new JSONObject(Ajustes.prefs(c).getString(CLAVE, "{}")); }
-        catch (Exception e) { return new JSONObject(); }
+        JSONObject o;
+        try { o = new JSONObject(Ajustes.prefs(c).getString(CLAVE, "{}")); }
+        catch (Exception e) { o = new JSONObject(); }
+        sembrar(c, o);
+        return o;
     }
 
     private static void escribir(Context c, JSONObject o) {
