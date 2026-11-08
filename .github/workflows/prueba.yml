@@ -7,8 +7,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          curl -sSL https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/icao_aircraft_types2.js | gunzip > t2.json
-          python3 -c "
-          import json; d=json.load(open('t2.json')); print('N', len(d)); ks=list(d)[:3]
-          for k in ['A20N','B738','EC35','H145','C172','A388','R44','GLID','BALL','AS50','F18H','EUFI']: print('ROW', k, json.dumps(d.get(k)))
-          "
+          for p in "40.4/-3.7/250" "41.4/2.1/200" "37.4/-5.9/200" "43.3/-3.8/200" "39.5/-0.4/150" "28.3/-15.6/200" "42.8/-1.6/150"; do
+            curl -sS -m 30 "https://api.airplanes.live/v2/point/$p" -o "p_$(echo $p|tr / _).json"; sleep 1.2
+          done
+          python3 - <<'PY'
+          import json, glob, collections
+          ac = {}
+          for f in glob.glob('p_*.json'):
+              try:
+                  for a in json.load(open(f)).get('ac', []): ac[a.get('hex')] = a
+              except Exception as e: print('ERR', f, e)
+          print('TOTAL', len(ac))
+          ops = collections.Counter()
+          for a in ac.values():
+              r = a.get('r','') or ''
+              if r.startswith('EC-') or a.get('category')=='A7' or (a.get('dbFlags',0)&1):
+                  ops[(a.get('ownOp',''), a.get('category',''), a.get('t',''))]+=1
+          for (o,c,t),n in sorted(ops.items(), key=lambda x:-x[1])[:120]:
+              print('OP', repr(o), c, t, n)
+          print('--- helis / A7 detail')
+          for a in ac.values():
+              if a.get('category')=='A7' or (a.get('t','') or '').startswith(('EC','H1','AS','A1','R44','B06','BK','S76','AW','EH')):
+                  print('H', a.get('flight','').strip(), a.get('r',''), a.get('t',''), a.get('desc',''), '|', a.get('ownOp',''), '| flags', a.get('dbFlags',0), 'sqk', a.get('squawk',''))
+          PY
