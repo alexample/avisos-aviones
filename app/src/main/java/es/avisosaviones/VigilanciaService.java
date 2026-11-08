@@ -290,8 +290,9 @@ public class VigilanciaService extends Service {
         else if (militar) titulo = (heli ? "🚁🎖️ Helicóptero militar" : "✈️🎖️ Avión militar") + " encima: " + nombre;
         else titulo = (heli ? "🚁 Helicóptero" : "✈️ Avión") + " encima: " + nombre;
 
-        String ruta = indicativo.isEmpty() ? "" :
-                obtenerRuta(indicativo, a.optDouble("lat"), a.optDouble("lon"));
+        String[] infoRuta = obtenerRuta(indicativo);
+        String ruta = infoRuta[0];
+        if (operador.isEmpty()) operador = infoRuta[1];
 
         double nudos = a.optDouble("gs", Double.NaN);
         double rumbo = a.optDouble("track", a.optDouble("true_heading", Double.NaN));
@@ -329,9 +330,9 @@ public class VigilanciaService extends Service {
         String urlFr24;
         String indicativoLimpio = indicativo.replaceAll("[^A-Za-z0-9]", "");
         String matriculaLimpia = matricula.replaceAll("[^A-Za-z0-9-]", "");
-        if (!indicativoLimpio.isEmpty()) {
-            urlFr24 = "https://www.flightradar24.com/" + indicativoLimpio.toUpperCase(Locale.ROOT);
-        } else if (!matriculaLimpia.isEmpty()) {
+        // FR24 no encuentra los vuelos por indicativo ATC (p. ej. IBE07PH), así que se usa
+        // la matrícula: su ficha muestra el vuelo en curso.
+        if (!matriculaLimpia.isEmpty()) {
             urlFr24 = "https://www.flightradar24.com/data/aircraft/" + matriculaLimpia.toLowerCase(Locale.ROOT);
         } else {
             urlFr24 = String.format(Locale.US, "https://www.flightradar24.com/%.4f,%.4f/13",
@@ -385,68 +386,56 @@ public class VigilanciaService extends Service {
 
     // ---------------------------------------------------------------- datos extra
 
-    /** Indicativo → "Madrid (MAD) → Barcelona (BCN)". Cadena vacía = desconocida. */
-    private final Map<String, String> cacheRutas = new HashMap<>();
+    /** Indicativo → {ruta, aerolínea}. Cadenas vacías = desconocido. */
+    private final Map<String, String[]> cacheRutas = new HashMap<>();
 
-    private String obtenerRuta(String indicativo, double lat, double lon) {
-        String clave = indicativo.trim().toUpperCase(Locale.ROOT);
+    /** Ruta y aerolínea según adsbdb.com (gratis, sin clave). */
+    private String[] obtenerRuta(String indicativo) {
+        String clave = indicativo.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
+        if (clave.isEmpty()) return new String[]{"", ""};
         if (cacheRutas.containsKey(clave)) return cacheRutas.get(clave);
-        String ruta = "";
+        String[] res = {"", ""};
+        boolean definitivo = false;
         try {
-            JSONObject avion = new JSONObject();
-            avion.put("callsign", clave);
-            avion.put("lat", lat);
-            avion.put("lng", lon);
-            JSONObject peticion = new JSONObject();
-            peticion.put("planes", new JSONArray().put(avion));
-
-            HttpURLConnection c = (HttpURLConnection) new URL("https://api.adsb.lol/api/0/routeset").openConnection();
+            HttpURLConnection c = (HttpURLConnection) new URL("https://api.adsbdb.com/v0/callsign/" + clave).openConnection();
             c.setConnectTimeout(6_000);
             c.setReadTimeout(8_000);
-            c.setDoOutput(true);
-            c.setRequestMethod("POST");
-            c.setRequestProperty("Content-Type", "application/json");
             c.setRequestProperty("User-Agent", "AvisosAviones/1.0 (Android)");
-            try (java.io.OutputStream os = c.getOutputStream()) {
-                os.write(peticion.toString().getBytes("UTF-8"));
-            }
-            if (c.getResponseCode() == 200) {
+            int code = c.getResponseCode();
+            if (code == 404) definitivo = true; // ruta desconocida
+            if (code == 200) {
+                definitivo = true;
                 StringBuilder sb = new StringBuilder();
                 try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
                     String linea;
                     while ((linea = r.readLine()) != null) sb.append(linea);
                 }
-                JSONArray res = new JSONArray(sb.toString());
-                if (res.length() > 0) ruta = formatearRuta(res.getJSONObject(0));
+                JSONObject fr = new JSONObject(sb.toString()).optJSONObject("response");
+                if (fr != null) fr = fr.optJSONObject("flightroute");
+                if (fr != null) {
+                    String o = aeropuerto(fr.optJSONObject("origin"));
+                    String d = aeropuerto(fr.optJSONObject("destination"));
+                    if (!o.isEmpty() && !d.isEmpty()) res[0] = o + " → " + d;
+                    JSONObject al = fr.optJSONObject("airline");
+                    if (al != null) res[1] = al.optString("name", "").trim();
+                }
             }
         } catch (Exception ignored) {}
-        if (cacheRutas.size() > 500) cacheRutas.clear();
-        cacheRutas.put(clave, ruta);
-        return ruta;
+        if (definitivo) {
+            if (cacheRutas.size() > 500) cacheRutas.clear();
+            cacheRutas.put(clave, res);
+        }
+        return res;
     }
 
-    private static String formatearRuta(JSONObject r) {
-        Object plausible = r.opt("plausible");
-        if (Boolean.FALSE.equals(plausible) || Integer.valueOf(0).equals(plausible)) return "";
-        JSONArray aeropuertos = r.optJSONArray("_airports");
-        if (aeropuertos != null && aeropuertos.length() >= 2) {
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < aeropuertos.length(); i++) {
-                JSONObject ap = aeropuertos.optJSONObject(i);
-                if (ap == null) continue;
-                String lugar = ap.optString("location", "").trim();
-                if (lugar.isEmpty()) lugar = ap.optString("name", "").trim();
-                String codigo = ap.optString("iata", "").trim();
-                if (codigo.isEmpty()) codigo = ap.optString("icao", "").trim();
-                if (sb.length() > 0) sb.append(" → ");
-                sb.append(lugar.isEmpty() ? codigo : lugar + (codigo.isEmpty() ? "" : " (" + codigo + ")"));
-            }
-            return sb.toString();
-        }
-        String codigos = r.optString("_airport_codes_iata", "");
-        if (codigos.isEmpty() || "unknown".equalsIgnoreCase(codigos)) codigos = r.optString("airport_codes", "");
-        if (codigos.isEmpty() || "unknown".equalsIgnoreCase(codigos)) return "";
-        return codigos.replace("-", " → ");
+    private static String aeropuerto(JSONObject ap) {
+        if (ap == null) return "";
+        String lugar = ap.optString("municipality", "").trim();
+        if (lugar.isEmpty()) lugar = ap.optString("name", "").trim();
+        String codigo = ap.optString("iata_code", "").trim();
+        if (codigo.isEmpty()) codigo = ap.optString("icao_code", "").trim();
+        if (lugar.isEmpty()) return codigo;
+        return codigo.isEmpty() ? lugar : lugar + " (" + codigo + ")";
     }
 
     private static String puntoCardinal(double grados) {
