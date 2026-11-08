@@ -176,13 +176,25 @@ public class VigilanciaService extends Service {
         }
 
         double radioKm = Ajustes.radioKm(this);
+        double distMinKm = Ajustes.distMinKm(this);
+        int modoZona = Ajustes.modoZona(this);
+        double radioExtKm = Math.max(radioKm, Ajustes.radioExtKm(this));
         int altMaxM = Ajustes.altitudMaxM(this);
         boolean soloHeli = Ajustes.soloHelicopteros(this);
-        int radioNm = (int) Math.max(1, Math.ceil(radioKm / 1.852));
+        String fMat = Ajustes.fMatriculas(this);
+        String fInd = Ajustes.fIndicativos(this);
+        String fOri = Ajustes.fOrigen(this);
+        String fDes = Ajustes.fDestino(this);
+        String fSqk = Ajustes.fSquawk(this);
+        boolean filtroRuta = !Ajustes.vacio(fOri) || !Ajustes.vacio(fDes);
+
+        double radioConsultaKm = modoZona == Ajustes.ZONA_DENTRO ? radioKm : radioExtKm;
+        int radioNm = (int) Math.max(1, Math.ceil(radioConsultaKm / 1.852));
 
         JSONArray aparatos = descargar(yo.getLatitude(), yo.getLongitude(), radioNm);
 
-        int enRadio = 0;
+        Map<String, String[]> fr24 = null; // se descarga solo si hace falta, una vez por vuelta
+        int enRadio = 0, coinciden = 0;
         long ahora = System.currentTimeMillis();
         for (int i = 0; i < aparatos.length(); i++) {
             JSONObject a = aparatos.getJSONObject(i);
@@ -192,25 +204,56 @@ public class VigilanciaService extends Service {
             Location.distanceBetween(yo.getLatitude(), yo.getLongitude(),
                     a.getDouble("lat"), a.getDouble("lon"), d);
             double distKm = d[0] / 1000.0;
-            if (distKm > radioKm) continue;
+            boolean dentro = distKm <= radioKm;
+            if (dentro) enRadio++;
 
-            boolean enTierra = "ground".equals(a.optString("alt_baro"));
-            if (enTierra) continue;
+            // Zona
+            boolean enZona;
+            if (modoZona == Ajustes.ZONA_DENTRO) enZona = dentro && distKm >= distMinKm;
+            else if (modoZona == Ajustes.ZONA_FUERA) enZona = !dentro && distKm <= radioExtKm;
+            else enZona = distKm >= distMinKm && distKm <= radioExtKm;
+            if (!enZona) continue;
+
+            if ("ground".equals(a.optString("alt_baro"))) continue;
             int altM = altitudMetros(a);
             if (altMaxM > 0 && altM > altMaxM) continue;
 
             boolean heli = esHelicoptero(a);
             if (soloHeli && !heli) continue;
 
-            enRadio++;
-            String hex = a.optString("hex", "?");
+            String hex = a.optString("hex", "?").toUpperCase(Locale.ROOT);
+            String matricula = a.optString("r", "");
+            String indicativo = a.optString("flight", "").trim();
+            if (!Ajustes.coincide(fMat, matricula)) continue;
+            if (!Ajustes.coincide(fInd, indicativo)) continue;
+            if (!Ajustes.coincide(fSqk, a.optString("squawk", ""))) continue;
+
+            // Ya avisado hace poco: no hace falta mirar ruta
             Long ultimo = avisados.get(hex);
             if (ultimo != null && ahora - ultimo < ENFRIAMIENTO_MS) {
-                avisados.put(hex, ahora); // sigue cerca: alarga el silencio
+                avisados.put(hex, ahora); // sigue en la zona: alarga el silencio
+                coinciden++;
                 continue;
             }
+
+            if (fr24 == null) fr24 = cargarFr24(yo.getLatitude(), yo.getLongitude(), radioConsultaKm);
+            String[] datosFr24 = fr24.get(hex); // {id, origen, destino, vuelo, indicativo}
+
+            if (filtroRuta) {
+                String origen = datosFr24 != null ? datosFr24[1] : "";
+                String destino = datosFr24 != null ? datosFr24[2] : "";
+                if (origen.isEmpty() && destino.isEmpty()) {
+                    String[] r = obtenerRuta(indicativo); // adsbdb como respaldo
+                    origen = r[2];
+                    destino = r[3];
+                }
+                if (!Ajustes.vacio(fOri) && (origen.isEmpty() || !Ajustes.coincide(fOri, origen))) continue;
+                if (!Ajustes.vacio(fDes) && (destino.isEmpty() || !Ajustes.coincide(fDes, destino))) continue;
+            }
+
+            coinciden++;
             avisados.put(hex, ahora);
-            avisar(a, heli, distKm, altM);
+            avisar(a, heli, distKm, altM, dentro, datosFr24);
         }
 
         // Limpieza de la memoria de avisos
@@ -219,8 +262,9 @@ public class VigilanciaService extends Service {
 
         String hora = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
         String txt = String.format(Locale.getDefault(),
-                "Vigilando · %d en tu radio de %.1f km · %d en la zona\nÚltima comprobación %s (precisión GPS ±%.0f m)",
-                enRadio, radioKm, aparatos.length(), hora, yo.getAccuracy());
+                "Vigilando · %d en tu radio de %.1f km · %d cumplen tus filtros · %d consultados\nÚltima comprobación %s (precisión GPS ±%.0f m)%s",
+                enRadio, radioKm, coinciden, aparatos.length(), hora, yo.getAccuracy(),
+                estadoFr24.isEmpty() ? "" : "\n" + estadoFr24);
         publicarEstado(txt);
         actualizarNotificacionServicio(String.format(Locale.getDefault(),
                 "Vigilando · %d en tu radio · %s", enRadio, hora));
@@ -270,7 +314,7 @@ public class VigilanciaService extends Service {
 
     // ---------------------------------------------------------------- notificaciones
 
-    private void avisar(JSONObject a, boolean heli, double distKm, int altM) {
+    private void avisar(JSONObject a, boolean heli, double distKm, int altM, boolean dentro, String[] fr24) {
         String indicativo = a.optString("flight", "").trim();
         String matricula = a.optString("r", "").trim();
         String tipo = a.optString("t", "").trim();
@@ -285,14 +329,23 @@ public class VigilanciaService extends Service {
         String emergencia = a.optString("emergency", "none");
         String textoEmergencia = textoEmergencia(squawk, emergencia);
 
-        String titulo;
-        if (textoEmergencia != null) titulo = "🚨 " + textoEmergencia + ": " + nombre;
-        else if (militar) titulo = (heli ? "🚁🎖️ Helicóptero militar" : "✈️🎖️ Avión militar") + " encima: " + nombre;
-        else titulo = (heli ? "🚁 Helicóptero" : "✈️ Avión") + " encima: " + nombre;
-
         String[] infoRuta = obtenerRuta(indicativo);
         String ruta = infoRuta[0];
         if (operador.isEmpty()) operador = infoRuta[1];
+        if (fr24 != null && !fr24[1].isEmpty() && !fr24[2].isEmpty()) {
+            // FR24 tiene la ruta real del día; adsbdb solo la habitual del indicativo
+            boolean mismaRuta = fr24[1].equalsIgnoreCase(infoRuta[2]) && fr24[2].equalsIgnoreCase(infoRuta[3]);
+            if (!mismaRuta) ruta = fr24[1] + " → " + fr24[2];
+        }
+        String vueloFr24 = fr24 != null ? fr24[3] : "";
+        String nombreTitulo = (!vueloFr24.isEmpty() && !vueloFr24.equalsIgnoreCase(indicativo))
+                ? vueloFr24 + " (" + nombre + ")" : nombre;
+
+        String donde = dentro ? " encima: " : String.format(Locale.getDefault(), " a %.0f km: ", distKm);
+        String titulo;
+        if (textoEmergencia != null) titulo = "🚨 " + textoEmergencia + ": " + nombreTitulo;
+        else if (militar) titulo = (heli ? "🚁🎖️ Helicóptero militar" : "✈️🎖️ Avión militar") + donde + nombreTitulo;
+        else titulo = (heli ? "🚁 Helicóptero" : "✈️ Avión") + donde + nombreTitulo;
 
         double nudos = a.optDouble("gs", Double.NaN);
         double rumbo = a.optDouble("track", a.optDouble("true_heading", Double.NaN));
@@ -332,7 +385,10 @@ public class VigilanciaService extends Service {
         String matriculaLimpia = matricula.replaceAll("[^A-Za-z0-9-]", "");
         // FR24 no encuentra los vuelos por indicativo ATC (p. ej. IBE07PH), así que se usa
         // la matrícula: su ficha muestra el vuelo en curso.
-        if (!matriculaLimpia.isEmpty()) {
+        if (fr24 != null && !fr24[0].isEmpty()) {
+            String cs = !fr24[4].isEmpty() ? fr24[4] : (!indicativoLimpio.isEmpty() ? indicativoLimpio : matriculaLimpia);
+            urlFr24 = "https://www.flightradar24.com/" + cs.replaceAll("[^A-Za-z0-9]", "") + "/" + fr24[0];
+        } else if (!matriculaLimpia.isEmpty()) {
             urlFr24 = "https://www.flightradar24.com/data/aircraft/" + matriculaLimpia.toLowerCase(Locale.ROOT);
         } else {
             urlFr24 = String.format(Locale.US, "https://www.flightradar24.com/%.4f,%.4f/13",
@@ -343,7 +399,7 @@ public class VigilanciaService extends Service {
             JSONObject e = new JSONObject();
             e.put("ts", System.currentTimeMillis());
             e.put("hex", hex);
-            e.put("nombre", nombre);
+            e.put("nombre", nombreTitulo);
             e.put("heli", heli);
             e.put("modelo", !desc.isEmpty() ? desc : tipo);
             e.put("matricula", matricula.equals(nombre) ? "" : matricula);
@@ -358,6 +414,8 @@ public class VigilanciaService extends Service {
             e.put("url_fr24", urlFr24);
             e.put("reg", matricula);
             e.put("callsign", indicativo);
+            if (!vueloFr24.isEmpty()) e.put("vuelo", vueloFr24);
+            e.put("dentro", dentro);
             Registro.guardar(this, e);
         } catch (Exception ignored) {}
 
@@ -394,9 +452,9 @@ public class VigilanciaService extends Service {
     /** Ruta y aerolínea según adsbdb.com (gratis, sin clave). */
     private String[] obtenerRuta(String indicativo) {
         String clave = indicativo.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
-        if (clave.isEmpty()) return new String[]{"", ""};
+        if (clave.isEmpty()) return new String[]{"", "", "", ""};
         if (cacheRutas.containsKey(clave)) return cacheRutas.get(clave);
-        String[] res = {"", ""};
+        String[] res = {"", "", "", ""};
         boolean definitivo = false;
         try {
             HttpURLConnection c = (HttpURLConnection) new URL("https://api.adsbdb.com/v0/callsign/" + clave).openConnection();
@@ -418,6 +476,8 @@ public class VigilanciaService extends Service {
                     String o = aeropuerto(fr.optJSONObject("origin"));
                     String d = aeropuerto(fr.optJSONObject("destination"));
                     if (!o.isEmpty() && !d.isEmpty()) res[0] = o + " → " + d;
+                    res[2] = codigoAeropuerto(fr.optJSONObject("origin"));
+                    res[3] = codigoAeropuerto(fr.optJSONObject("destination"));
                     JSONObject al = fr.optJSONObject("airline");
                     if (al != null) res[1] = al.optString("name", "").trim();
                 }
@@ -428,6 +488,71 @@ public class VigilanciaService extends Service {
             cacheRutas.put(clave, res);
         }
         return res;
+    }
+
+    private static String codigoAeropuerto(JSONObject ap) {
+        if (ap == null) return "";
+        String iata = ap.optString("iata_code", "").trim();
+        String icao = ap.optString("icao_code", "").trim();
+        return iata.isEmpty() ? icao : iata;
+    }
+
+    // ---------------------------------------------------------------- Flightradar24
+
+    /** Último estado de la consulta a FR24, para mostrarlo en la app. */
+    private volatile String estadoFr24 = "";
+
+    /**
+     * Vuelos de FR24 en un cuadrado alrededor de la posición: hex → {id, origen, destino, vuelo, indicativo}.
+     * Da la ruta real del día y el identificador para abrir el vuelo en el mapa.
+     */
+    private Map<String, String[]> cargarFr24(double lat, double lon, double radioKm) {
+        Map<String, String[]> mapa = new HashMap<>();
+        try {
+            double dLat = radioKm / 111.0 + 0.05;
+            double dLon = radioKm / (111.0 * Math.max(0.2, Math.cos(Math.toRadians(lat)))) + 0.05;
+            String url = String.format(Locale.US,
+                    "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds=%.4f,%.4f,%.4f,%.4f"
+                            + "&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=0&air=1&vehicles=0&estimated=1"
+                            + "&maxage=14400&gliders=1&stats=0",
+                    lat + dLat, lat - dLat, lon - dLon, lon + dLon);
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(6_000);
+            c.setReadTimeout(8_000);
+            c.setRequestProperty("User-Agent", AbrirFr24Activity.UA_NAVEGADOR);
+            c.setRequestProperty("Accept", "application/json");
+            c.setRequestProperty("Referer", "https://www.flightradar24.com/");
+            c.setRequestProperty("Origin", "https://www.flightradar24.com");
+            int code = c.getResponseCode();
+            if (code != 200) {
+                estadoFr24 = "FR24: no disponible (" + code + "), uso rutas aproximadas";
+                return mapa;
+            }
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
+                String linea;
+                while ((linea = r.readLine()) != null) sb.append(linea);
+            }
+            JSONObject json = new JSONObject(sb.toString());
+            Iterator<String> claves = json.keys();
+            while (claves.hasNext()) {
+                String id = claves.next();
+                JSONArray v = json.optJSONArray(id);
+                if (v == null || v.length() < 17) continue;
+                String hex = v.optString(0, "").toUpperCase(Locale.ROOT);
+                if (hex.isEmpty()) continue;
+                mapa.put(hex, new String[]{
+                        id,
+                        v.optString(11, "").trim(),
+                        v.optString(12, "").trim(),
+                        v.optString(13, "").trim(),
+                        v.optString(16, "").trim()});
+            }
+            estadoFr24 = "FR24: OK (" + mapa.size() + " vuelos)";
+        } catch (Exception e) {
+            estadoFr24 = "FR24: error " + e.getClass().getSimpleName() + ", uso rutas aproximadas";
+        }
+        return mapa;
     }
 
     private static String aeropuerto(JSONObject ap) {

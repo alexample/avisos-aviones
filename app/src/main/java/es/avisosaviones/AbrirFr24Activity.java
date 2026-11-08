@@ -35,13 +35,19 @@ public class AbrirFr24Activity extends Activity {
             "com.flightradar24pro",
     };
 
-    private static final String UA_NAVEGADOR =
+    static final String UA_NAVEGADOR =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         final String respaldo = getIntent().getStringExtra(EXTRA_URL);
+        // Si ya viene el enlace del vuelo en directo (obtenido al avisar), abrirlo tal cual
+        if (respaldo != null && respaldo.matches("https://www\\.flightradar24\\.com/[A-Za-z0-9]+/[0-9a-f]{6,}")) {
+            abrir(this, respaldo);
+            finish();
+            return;
+        }
         String m = limpiar(getIntent().getStringExtra(EXTRA_MATRICULA));
         // Avisos antiguos solo traen el enlace de la ficha: sacar la matrícula de ahí
         if (m.isEmpty() && respaldo != null && respaldo.contains("/data/aircraft/")) {

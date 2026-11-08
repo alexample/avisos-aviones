@@ -32,6 +32,9 @@ public class MainActivity extends Activity {
     private static final int REQ_PERMISOS = 1;
 
     private EditText radio, altitud, intervalo;
+    private EditText distMin, radioExt, fMat, fInd, fOri, fDes, fSqk;
+    private android.widget.RadioGroup zona;
+    private static final int ID_DENTRO = 1001, ID_FUERA = 1002, ID_AMBAS = 1003;
     private CheckBox soloHeli;
     private Button boton;
     private TextView estado;
@@ -95,6 +98,48 @@ public class MainActivity extends Activity {
         soloHeli.setPadding(0, dp(8), 0, dp(8));
         col.addView(soloHeli);
 
+        // ---------- Filtros
+        TextView tf = new TextView(this);
+        tf.setText("🔎 Filtros (opcionales)");
+        tf.setTextSize(18);
+        tf.setTypeface(Typeface.DEFAULT_BOLD);
+        tf.setPadding(0, dp(16), 0, 0);
+        col.addView(tf);
+
+        TextView ayuda = new TextView(this);
+        ayuda.setTextSize(12);
+        ayuda.setText("Vacío = sin filtro. Varios valores separados por comas. "
+                + "Comodín *  (EC-* = matrículas españolas). Con ! delante se excluye (!RYR*).");
+        col.addView(ayuda);
+
+        TextView tz = new TextView(this);
+        tz.setText("Avisar de los que están:");
+        tz.setPadding(0, dp(10), 0, 0);
+        col.addView(tz);
+        zona = new android.widget.RadioGroup(this);
+        zona.addView(opcion(ID_DENTRO, "Dentro del radio de aviso"));
+        zona.addView(opcion(ID_FUERA, "Fuera del radio (hasta el radio ampliado)"));
+        zona.addView(opcion(ID_AMBAS, "Dentro y fuera (hasta el radio ampliado)"));
+        col.addView(zona);
+
+        radioExt = campo(col, "Radio ampliado (km)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        distMin = campo(col, "Distancia mínima (km, 0 = sin mínimo)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        int texto = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+        fMat = campo(col, "Matrículas  (ej: EC-MXV, EC-*)", texto);
+        fInd = campo(col, "Indicativos  (ej: IBE*, RYR9K)", texto);
+        fOri = campo(col, "Origen, código IATA  (ej: MAD, BCN)", texto);
+        fDes = campo(col, "Destino, código IATA  (ej: LHR, PMI)", texto);
+        fSqk = campo(col, "Squawk  (ej: 7700, 7600, 7500)", texto);
+
+        Button guardar = new Button(this);
+        guardar.setText("💾 Guardar ajustes");
+        guardar.setOnClickListener(v -> {
+            if (guardarAjustes()) Toast.makeText(this,
+                    Ajustes.activo(this) ? "Guardado. Se aplica en la próxima comprobación." : "Guardado.",
+                    Toast.LENGTH_SHORT).show();
+        });
+        col.addView(guardar);
+
         boton = new Button(this);
         boton.setTextSize(18);
         boton.setOnClickListener(v -> alternar());
@@ -143,12 +188,37 @@ public class MainActivity extends Activity {
         return e;
     }
 
+    private android.widget.RadioButton opcion(int id, String txt) {
+        android.widget.RadioButton rb = new android.widget.RadioButton(this);
+        rb.setId(id);
+        rb.setText(txt);
+        return rb;
+    }
+
+    private static String numero(float f) {
+        return f == (int) f ? String.valueOf((int) f) : String.valueOf(f);
+    }
+
+    private static float leerFloat(EditText e, float porDefecto) {
+        String t = e.getText().toString().trim().replace(',', '.');
+        return t.isEmpty() ? porDefecto : Float.parseFloat(t);
+    }
+
     private void cargarAjustes() {
         float r = Ajustes.radioKm(this);
         radio.setText(r == (int) r ? String.valueOf((int) r) : String.valueOf(r));
         altitud.setText(String.valueOf(Ajustes.altitudMaxM(this)));
         intervalo.setText(String.valueOf(Ajustes.intervaloS(this)));
         soloHeli.setChecked(Ajustes.soloHelicopteros(this));
+        int mz = Ajustes.modoZona(this);
+        zona.check(mz == Ajustes.ZONA_FUERA ? ID_FUERA : mz == Ajustes.ZONA_AMBAS ? ID_AMBAS : ID_DENTRO);
+        radioExt.setText(numero(Ajustes.radioExtKm(this)));
+        distMin.setText(numero(Ajustes.distMinKm(this)));
+        fMat.setText(Ajustes.fMatriculas(this));
+        fInd.setText(Ajustes.fIndicativos(this));
+        fOri.setText(Ajustes.fOrigen(this));
+        fDes.setText(Ajustes.fDestino(this));
+        fSqk.setText(Ajustes.fSquawk(this));
     }
 
     private boolean guardarAjustes() {
@@ -158,7 +228,24 @@ public class MainActivity extends Activity {
             int i = Integer.parseInt(intervalo.getText().toString());
             if (r <= 0 || r > 400) throw new NumberFormatException();
             if (i < 5) i = 5;
+            float ext = leerFloat(radioExt, 50f);
+            float min = leerFloat(distMin, 0f);
+            if (ext <= 0 || ext > 400 || min < 0) throw new NumberFormatException();
+            int idZona = zona.getCheckedRadioButtonId();
+            int modo = idZona == ID_FUERA ? Ajustes.ZONA_FUERA : idZona == ID_AMBAS ? Ajustes.ZONA_AMBAS : Ajustes.ZONA_DENTRO;
+            if (modo != Ajustes.ZONA_DENTRO && ext <= r) {
+                Toast.makeText(this, "El radio ampliado tiene que ser mayor que el radio de aviso", Toast.LENGTH_LONG).show();
+                return false;
+            }
             Ajustes.prefs(this).edit()
+                    .putFloat(Ajustes.RADIO_EXT_KM, ext)
+                    .putFloat(Ajustes.DIST_MIN_KM, min)
+                    .putInt(Ajustes.MODO_ZONA, modo)
+                    .putString(Ajustes.F_MATRICULAS, fMat.getText().toString().trim())
+                    .putString(Ajustes.F_INDICATIVOS, fInd.getText().toString().trim())
+                    .putString(Ajustes.F_ORIGEN, fOri.getText().toString().trim())
+                    .putString(Ajustes.F_DESTINO, fDes.getText().toString().trim())
+                    .putString(Ajustes.F_SQUAWK, fSqk.getText().toString().trim())
                     .putFloat(Ajustes.RADIO_KM, r)
                     .putInt(Ajustes.ALTITUD_MAX_M, Math.max(0, a))
                     .putInt(Ajustes.INTERVALO_S, i)
@@ -166,7 +253,7 @@ public class MainActivity extends Activity {
                     .apply();
             return true;
         } catch (NumberFormatException ex) {
-            Toast.makeText(this, "Revisa los valores (radio entre 0 y 400 km)", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Revisa los valores (radios entre 0 y 400 km, distancia mínima ≥ 0)", Toast.LENGTH_LONG).show();
             return false;
         }
     }
