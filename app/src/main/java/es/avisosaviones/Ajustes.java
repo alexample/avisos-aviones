@@ -36,19 +36,26 @@ final class Ajustes {
 
     static float radioKm(Context c) { return prefs(c).getFloat(RADIO_KM, 2f); }
     /** 0 = sin límite. */
-    static int altitudMaxM(Context c) { return prefs(c).getInt(ALTITUD_MAX_M, 0); }
+    static int altitudMaxM(Context c) { return usa(c, ALTITUD_MAX_M) ? prefs(c).getInt(ALTITUD_MAX_M, 0) : 0; }
     static boolean soloHelicopteros(Context c) { return prefs(c).getBoolean(SOLO_HELICOPTEROS, false); }
     static int intervaloS(Context c) { return prefs(c).getInt(INTERVALO_S, 15); }
     static boolean activo(Context c) { return prefs(c).getBoolean(ACTIVO, false); }
 
-    static float distMinKm(Context c) { return prefs(c).getFloat(DIST_MIN_KM, 0f); }
+    static float distMinKm(Context c) { return usa(c, DIST_MIN_KM) ? prefs(c).getFloat(DIST_MIN_KM, 0f) : 0f; }
     static int modoZona(Context c) { return prefs(c).getInt(MODO_ZONA, ZONA_DENTRO); }
     static float radioExtKm(Context c) { return prefs(c).getFloat(RADIO_EXT_KM, 50f); }
-    static String fMatriculas(Context c) { return prefs(c).getString(F_MATRICULAS, ""); }
-    static String fIndicativos(Context c) { return prefs(c).getString(F_INDICATIVOS, ""); }
-    static String fOrigen(Context c) { return prefs(c).getString(F_ORIGEN, ""); }
-    static String fDestino(Context c) { return prefs(c).getString(F_DESTINO, ""); }
-    static String fSquawk(Context c) { return prefs(c).getString(F_SQUAWK, ""); }
+    static String fMatriculas(Context c) { return filtro(c, F_MATRICULAS); }
+    static String fIndicativos(Context c) { return filtro(c, F_INDICATIVOS); }
+    static String fOrigen(Context c) { return filtro(c, F_ORIGEN); }
+    static String fDestino(Context c) { return filtro(c, F_DESTINO); }
+    static String fSquawk(Context c) { return filtro(c, F_SQUAWK); }
+
+    /** Cada filtro tiene un interruptor: apagado = se ignora, pero se conserva el valor. */
+    static String claveUsar(String clave) { return "usar_" + clave; }
+    static boolean usa(Context c, String clave) { return prefs(c).getBoolean(claveUsar(clave), true); }
+    private static String filtro(Context c, String clave) {
+        return usa(c, clave) ? prefs(c).getString(clave, "") : "";
+    }
 
     /** Filtro vacío = acepta todo. */
     static boolean vacio(String filtro) {

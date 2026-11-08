@@ -6,21 +6,26 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.InputType;
-import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -30,12 +35,22 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private static final int REQ_PERMISOS = 1;
-
-    private EditText radio, altitud, intervalo;
-    private EditText distMin, radioExt, fMat, fInd, fOri, fDes, fSqk;
-    private android.widget.RadioGroup zona;
     private static final int ID_DENTRO = 1001, ID_FUERA = 1002, ID_AMBAS = 1003;
-    private CheckBox soloHeli;
+
+    /** Campo con interruptor: el interruptor activa/desactiva el filtro sin borrar el valor. */
+    private static final class Filtro {
+        final String clave;
+        final Switch sw;
+        final EditText campo;
+        Filtro(String clave, Switch sw, EditText campo) { this.clave = clave; this.sw = sw; this.campo = campo; }
+    }
+
+    private EditText radio, radioExt, intervalo;
+    private Switch soloHeli;
+    private RadioGroup zona;
+    private LinearLayout bloqueRadioExt;
+    private Filtro fDistMin, fAltitud, fMat, fInd, fSqk, fOri, fDes;
+    private final List<Filtro> filtros = new ArrayList<>();
     private Button boton;
     private TextView estado;
 
@@ -72,8 +87,10 @@ public class MainActivity extends Activity {
         unregisterReceiver(receptorEstado);
     }
 
+    // ================================================================ interfaz
+
     private void construirInterfaz() {
-        int pad = dp(20);
+        int pad = dp(16);
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(pad, pad + dp(24), pad, pad);
@@ -84,52 +101,67 @@ public class MainActivity extends Activity {
         titulo.setTypeface(Typeface.DEFAULT_BOLD);
         col.addView(titulo);
 
-        TextView sub = new TextView(this);
-        sub.setText("Te avisa cuando un avión o helicóptero pasa cerca de donde estás.");
-        sub.setPadding(0, dp(6), 0, dp(18));
-        col.addView(sub);
+        // ---------- Arriba: lo que más se usa
+        boton = new Button(this);
+        boton.setTextSize(18);
+        boton.setOnClickListener(v -> alternar());
+        LinearLayout.LayoutParams lpBoton = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60));
+        lpBoton.topMargin = dp(12);
+        col.addView(boton, lpBoton);
 
-        radio = campo(col, "Radio de aviso (km)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        altitud = campo(col, "Altitud máxima en metros (0 = sin límite)", InputType.TYPE_CLASS_NUMBER);
-        intervalo = campo(col, "Comprobar cada (segundos, mínimo 5)", InputType.TYPE_CLASS_NUMBER);
+        estado = new TextView(this);
+        estado.setPadding(0, dp(8), 0, dp(4));
+        estado.setText("Parado.");
+        col.addView(estado);
 
-        soloHeli = new CheckBox(this);
-        soloHeli.setText("Solo helicópteros 🚁");
-        soloHeli.setPadding(0, dp(8), 0, dp(8));
-        col.addView(soloHeli);
+        Button historial = new Button(this);
+        historial.setText("📋 Historial de pasos");
+        historial.setOnClickListener(v -> startActivity(new Intent(this, HistorialActivity.class)));
+        col.addView(historial);
 
-        // ---------- Filtros
-        TextView tf = new TextView(this);
-        tf.setText("🔎 Filtros (opcionales)");
-        tf.setTextSize(18);
-        tf.setTypeface(Typeface.DEFAULT_BOLD);
-        tf.setPadding(0, dp(16), 0, 0);
-        col.addView(tf);
+        // ---------- 1. Zona
+        LinearLayout zonaTarjeta = tarjeta(col, "📍 Zona");
+        radio = campoSimple(zonaTarjeta, "Radio de aviso (km)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
 
-        TextView ayuda = new TextView(this);
-        ayuda.setTextSize(12);
-        ayuda.setText("Vacío = sin filtro. Varios valores separados por comas. "
-                + "Comodín *  (EC-* = matrículas españolas). Con ! delante se excluye (!RYR*).");
-        col.addView(ayuda);
-
-        TextView tz = new TextView(this);
-        tz.setText("Avisar de los que están:");
-        tz.setPadding(0, dp(10), 0, 0);
-        col.addView(tz);
-        zona = new android.widget.RadioGroup(this);
+        etiqueta(zonaTarjeta, "Avisar de los que están:");
+        zona = new RadioGroup(this);
         zona.addView(opcion(ID_DENTRO, "Dentro del radio de aviso"));
         zona.addView(opcion(ID_FUERA, "Fuera del radio (hasta el radio ampliado)"));
         zona.addView(opcion(ID_AMBAS, "Dentro y fuera (hasta el radio ampliado)"));
-        col.addView(zona);
+        zona.setOnCheckedChangeListener((g, id) -> bloqueRadioExt.setVisibility(id == ID_DENTRO ? View.GONE : View.VISIBLE));
+        zonaTarjeta.addView(zona);
 
-        radioExt = campo(col, "Radio ampliado (km)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        distMin = campo(col, "Distancia mínima (km, 0 = sin mínimo)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        bloqueRadioExt = new LinearLayout(this);
+        bloqueRadioExt.setOrientation(LinearLayout.VERTICAL);
+        radioExt = campoSimple(bloqueRadioExt, "Radio ampliado (km)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        zonaTarjeta.addView(bloqueRadioExt);
+
+        fDistMin = filtro(zonaTarjeta, Ajustes.DIST_MIN_KM, "Distancia mínima (km)",
+                "No avisar de lo que esté más cerca de esto", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+
+        // ---------- 2. Aeronave
+        LinearLayout aeroTarjeta = tarjeta(col, "✈️ Aeronave");
+        soloHeli = new Switch(this);
+        soloHeli.setText("Solo helicópteros 🚁");
+        soloHeli.setPadding(0, dp(6), 0, dp(6));
+        aeroTarjeta.addView(soloHeli);
         int texto = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
-        fMat = campo(col, "Matrículas  (ej: EC-MXV, EC-*)", texto);
-        fInd = campo(col, "Indicativos  (ej: IBE*, RYR9K)", texto);
-        fOri = campo(col, "Origen, código IATA  (ej: MAD, BCN)", texto);
-        fDes = campo(col, "Destino, código IATA  (ej: LHR, PMI)", texto);
-        fSqk = campo(col, "Squawk  (ej: 7700, 7600, 7500)", texto);
+        fAltitud = filtro(aeroTarjeta, Ajustes.ALTITUD_MAX_M, "Altitud máxima (m)", "ej: 3000", InputType.TYPE_CLASS_NUMBER);
+        fMat = filtro(aeroTarjeta, Ajustes.F_MATRICULAS, "Matrículas", "ej: EC-MXV, EC-*", texto);
+        fInd = filtro(aeroTarjeta, Ajustes.F_INDICATIVOS, "Indicativos", "ej: IBE*, !RYR*", texto);
+        fSqk = filtro(aeroTarjeta, Ajustes.F_SQUAWK, "Squawk", "ej: 7700, 7600, 7500", texto);
+
+        // ---------- 3. Ruta
+        LinearLayout rutaTarjeta = tarjeta(col, "🛫 Ruta (código IATA)");
+        fOri = filtro(rutaTarjeta, Ajustes.F_ORIGEN, "Origen", "ej: MAD, BCN", texto);
+        fDes = filtro(rutaTarjeta, Ajustes.F_DESTINO, "Destino", "ej: LHR, PMI", texto);
+
+        TextView ayuda = new TextView(this);
+        ayuda.setTextSize(12);
+        ayuda.setPadding(dp(4), dp(8), dp(4), 0);
+        ayuda.setText("Cada filtro tiene su interruptor: apagado se ignora pero guarda lo escrito. "
+                + "Vacío = sin filtro. Varios valores con comas; * es comodín; ! delante excluye.");
+        col.addView(ayuda);
 
         Button guardar = new Button(this);
         guardar.setText("💾 Guardar ajustes");
@@ -138,36 +170,22 @@ public class MainActivity extends Activity {
                     Ajustes.activo(this) ? "Guardado. Se aplica en la próxima comprobación." : "Guardado.",
                     Toast.LENGTH_SHORT).show();
         });
-        col.addView(guardar);
+        LinearLayout.LayoutParams lpG = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpG.topMargin = dp(8);
+        col.addView(guardar, lpG);
 
-        boton = new Button(this);
-        boton.setTextSize(18);
-        boton.setOnClickListener(v -> alternar());
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(60));
-        lp.topMargin = dp(12);
-        col.addView(boton, lp);
-
-        Button historial = new Button(this);
-        historial.setText("📋 Historial de pasos");
-        historial.setOnClickListener(v -> startActivity(new Intent(this, HistorialActivity.class)));
-        col.addView(historial);
-
+        // ---------- 4. Avanzado
+        LinearLayout avTarjeta = tarjeta(col, "⚙️ Avanzado");
+        intervalo = campoSimple(avTarjeta, "Comprobar cada (segundos, mínimo 5)", InputType.TYPE_CLASS_NUMBER);
         Button bateria = new Button(this);
         bateria.setText("Quitar ahorro de batería (recomendado)");
         bateria.setOnClickListener(v -> pedirSinOptimizacionBateria());
-        col.addView(bateria);
-
-        estado = new TextView(this);
-        estado.setPadding(0, dp(18), 0, 0);
-        estado.setGravity(Gravity.START);
-        estado.setText("Parado.");
-        col.addView(estado);
+        avTarjeta.addView(bateria);
 
         TextView nota = new TextView(this);
         nota.setTextSize(12);
-        nota.setPadding(0, dp(24), 0, 0);
-        nota.setText("Datos: airplanes.live / adsb.lol (redes ADS-B comunitarias). "
+        nota.setPadding(dp(4), dp(16), dp(4), 0);
+        nota.setText("Datos: airplanes.live / adsb.lol, rutas de Flightradar24 y adsbdb. "
                 + "Los aparatos que no emiten ADS-B (muchos helicópteros militares o policiales) no aparecen.");
         col.addView(nota);
 
@@ -176,24 +194,67 @@ public class MainActivity extends Activity {
         setContentView(sv);
     }
 
-    private EditText campo(LinearLayout col, String etiqueta, int tipo) {
+    private LinearLayout tarjeta(LinearLayout padre, String titulo) {
+        LinearLayout t = new LinearLayout(this);
+        t.setOrientation(LinearLayout.VERTICAL);
+        t.setPadding(dp(14), dp(10), dp(14), dp(12));
+        GradientDrawable fondo = new GradientDrawable();
+        fondo.setColor(Color.parseColor("#F1F5FA"));
+        fondo.setCornerRadius(dp(14));
+        t.setBackground(fondo);
+
+        TextView tt = new TextView(this);
+        tt.setText(titulo);
+        tt.setTextSize(18);
+        tt.setTypeface(Typeface.DEFAULT_BOLD);
+        t.addView(tt);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(14);
+        padre.addView(t, lp);
+        return t;
+    }
+
+    private void etiqueta(LinearLayout padre, String txt) {
         TextView t = new TextView(this);
-        t.setText(etiqueta);
+        t.setText(txt);
         t.setPadding(0, dp(8), 0, 0);
-        col.addView(t);
+        padre.addView(t);
+    }
+
+    private EditText campoSimple(LinearLayout padre, String etiqueta, int tipo) {
+        etiqueta(padre, etiqueta);
         EditText e = new EditText(this);
         e.setInputType(tipo);
         e.setSingleLine(true);
-        col.addView(e);
+        padre.addView(e);
         return e;
     }
 
-    private android.widget.RadioButton opcion(int id, String txt) {
-        android.widget.RadioButton rb = new android.widget.RadioButton(this);
+    private Filtro filtro(LinearLayout padre, String clave, String etiqueta, String pista, int tipo) {
+        Switch sw = new Switch(this);
+        sw.setText(etiqueta);
+        sw.setPadding(0, dp(10), 0, 0);
+        padre.addView(sw);
+        EditText e = new EditText(this);
+        e.setInputType(tipo);
+        e.setSingleLine(true);
+        e.setHint(pista);
+        padre.addView(e);
+        sw.setOnCheckedChangeListener((b, on) -> { e.setEnabled(on); e.setAlpha(on ? 1f : 0.4f); });
+        Filtro f = new Filtro(clave, sw, e);
+        filtros.add(f);
+        return f;
+    }
+
+    private RadioButton opcion(int id, String txt) {
+        RadioButton rb = new RadioButton(this);
         rb.setId(id);
         rb.setText(txt);
         return rb;
     }
+
+    // ================================================================ ajustes
 
     private static String numero(float f) {
         return f == (int) f ? String.valueOf((int) f) : String.valueOf(f);
@@ -205,58 +266,70 @@ public class MainActivity extends Activity {
     }
 
     private void cargarAjustes() {
-        float r = Ajustes.radioKm(this);
-        radio.setText(r == (int) r ? String.valueOf((int) r) : String.valueOf(r));
-        altitud.setText(String.valueOf(Ajustes.altitudMaxM(this)));
+        SharedPreferences p = Ajustes.prefs(this);
+        radio.setText(numero(Ajustes.radioKm(this)));
+        radioExt.setText(numero(Ajustes.radioExtKm(this)));
         intervalo.setText(String.valueOf(Ajustes.intervaloS(this)));
         soloHeli.setChecked(Ajustes.soloHelicopteros(this));
         int mz = Ajustes.modoZona(this);
         zona.check(mz == Ajustes.ZONA_FUERA ? ID_FUERA : mz == Ajustes.ZONA_AMBAS ? ID_AMBAS : ID_DENTRO);
-        radioExt.setText(numero(Ajustes.radioExtKm(this)));
-        distMin.setText(numero(Ajustes.distMinKm(this)));
-        fMat.setText(Ajustes.fMatriculas(this));
-        fInd.setText(Ajustes.fIndicativos(this));
-        fOri.setText(Ajustes.fOrigen(this));
-        fDes.setText(Ajustes.fDestino(this));
-        fSqk.setText(Ajustes.fSquawk(this));
+        bloqueRadioExt.setVisibility(mz == Ajustes.ZONA_DENTRO ? View.GONE : View.VISIBLE);
+
+        fDistMin.campo.setText(numero(p.getFloat(Ajustes.DIST_MIN_KM, 0f)));
+        int alt = p.getInt(Ajustes.ALTITUD_MAX_M, 0);
+        fAltitud.campo.setText(alt > 0 ? String.valueOf(alt) : "");
+        for (Filtro f : new Filtro[]{fMat, fInd, fSqk, fOri, fDes}) {
+            f.campo.setText(p.getString(f.clave, ""));
+        }
+        for (Filtro f : filtros) {
+            boolean on = Ajustes.usa(this, f.clave);
+            f.sw.setChecked(on);
+            f.campo.setEnabled(on);
+            f.campo.setAlpha(on ? 1f : 0.4f);
+        }
     }
 
     private boolean guardarAjustes() {
         try {
-            float r = Float.parseFloat(radio.getText().toString().replace(',', '.'));
-            int a = altitud.getText().length() == 0 ? 0 : Integer.parseInt(altitud.getText().toString());
-            int i = Integer.parseInt(intervalo.getText().toString());
+            float r = leerFloat(radio, 2f);
+            String ti = intervalo.getText().toString().trim();
+            int i = ti.isEmpty() ? 15 : Integer.parseInt(ti);
             if (r <= 0 || r > 400) throw new NumberFormatException();
             if (i < 5) i = 5;
             float ext = leerFloat(radioExt, 50f);
-            float min = leerFloat(distMin, 0f);
-            if (ext <= 0 || ext > 400 || min < 0) throw new NumberFormatException();
+            float min = leerFloat(fDistMin.campo, 0f);
+            String ta = fAltitud.campo.getText().toString().trim();
+            int alt = ta.isEmpty() ? 0 : Integer.parseInt(ta);
+            if (ext <= 0 || ext > 400 || min < 0 || alt < 0) throw new NumberFormatException();
             int idZona = zona.getCheckedRadioButtonId();
             int modo = idZona == ID_FUERA ? Ajustes.ZONA_FUERA : idZona == ID_AMBAS ? Ajustes.ZONA_AMBAS : Ajustes.ZONA_DENTRO;
             if (modo != Ajustes.ZONA_DENTRO && ext <= r) {
                 Toast.makeText(this, "El radio ampliado tiene que ser mayor que el radio de aviso", Toast.LENGTH_LONG).show();
                 return false;
             }
-            Ajustes.prefs(this).edit()
-                    .putFloat(Ajustes.RADIO_EXT_KM, ext)
-                    .putFloat(Ajustes.DIST_MIN_KM, min)
-                    .putInt(Ajustes.MODO_ZONA, modo)
-                    .putString(Ajustes.F_MATRICULAS, fMat.getText().toString().trim())
-                    .putString(Ajustes.F_INDICATIVOS, fInd.getText().toString().trim())
-                    .putString(Ajustes.F_ORIGEN, fOri.getText().toString().trim())
-                    .putString(Ajustes.F_DESTINO, fDes.getText().toString().trim())
-                    .putString(Ajustes.F_SQUAWK, fSqk.getText().toString().trim())
+            SharedPreferences.Editor ed = Ajustes.prefs(this).edit()
                     .putFloat(Ajustes.RADIO_KM, r)
-                    .putInt(Ajustes.ALTITUD_MAX_M, Math.max(0, a))
+                    .putFloat(Ajustes.RADIO_EXT_KM, ext)
+                    .putInt(Ajustes.MODO_ZONA, modo)
                     .putInt(Ajustes.INTERVALO_S, i)
                     .putBoolean(Ajustes.SOLO_HELICOPTEROS, soloHeli.isChecked())
-                    .apply();
+                    .putFloat(Ajustes.DIST_MIN_KM, min)
+                    .putInt(Ajustes.ALTITUD_MAX_M, alt);
+            for (Filtro f : new Filtro[]{fMat, fInd, fSqk, fOri, fDes}) {
+                ed.putString(f.clave, f.campo.getText().toString().trim());
+            }
+            for (Filtro f : filtros) {
+                ed.putBoolean(Ajustes.claveUsar(f.clave), f.sw.isChecked());
+            }
+            ed.apply();
             return true;
         } catch (NumberFormatException ex) {
-            Toast.makeText(this, "Revisa los valores (radios entre 0 y 400 km, distancia mínima ≥ 0)", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Revisa los números (radios entre 0 y 400 km, nada negativo)", Toast.LENGTH_LONG).show();
             return false;
         }
     }
+
+    // ================================================================ vigilancia
 
     private void alternar() {
         if (Ajustes.activo(this)) {
