@@ -7,8 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "== db dir"; curl -sS "https://api.github.com/repos/wiedehopf/tar1090-db/contents/db?ref=master" | grep '"name"' | head -40
-          for u in https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/icao_aircraft_types.js \
-                   https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/icao_aircraft_types2.js ; do
-            echo "== $u"; curl -sSL -m 30 "$u" | head -c 600; echo; curl -sSL -m 30 "$u" -o /dev/null -w 'HTTP %{http_code} size %{size_download}\n'
-          done
+          curl -sSL https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/icao_aircraft_types2.js | gunzip > t2.json
+          python3 -c "
+          import json; d=json.load(open('t2.json')); print('N', len(d)); ks=list(d)[:3]
+          for k in ['A20N','B738','EC35','H145','C172','A388','R44','GLID','BALL','AS50','F18H','EUFI']: print('ROW', k, json.dumps(d.get(k)))
+          "
