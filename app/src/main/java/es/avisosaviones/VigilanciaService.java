@@ -282,7 +282,8 @@ public class VigilanciaService extends Service {
             coinciden++;
             avisados.put(hex, ahora);
             avisar(a, av.heli, av.distKm, av.altM, av.distKm < 3, datosFr24,
-                    (av.servicio.isEmpty() ? "" : Servicios.legible(av.servicio) + " · ") + "🔔 " + cumplida.nombre);
+                    (av.servicio.isEmpty() ? "" : Servicios.legible(av.servicio) + " · ") + "🔔 " + cumplida.nombre,
+                    Sonidos.canal(this, cumplida));
             if (coinciden > 15) break; // por si una alerta muy amplia dispara muchos a la vez
         }
 
@@ -401,7 +402,7 @@ public class VigilanciaService extends Service {
     // ---------------------------------------------------------------- notificaciones
 
     private void avisar(JSONObject a, boolean heli, double distKm, int altM, boolean dentro, String[] fr24,
-                        String nombreAlerta) {
+                        String nombreAlerta, String canal) {
         String indicativo = a.optString("flight", "").trim();
         String matricula = a.optString("r", "").trim();
         String tipo = a.optString("t", "").trim();
@@ -520,7 +521,7 @@ public class VigilanciaService extends Service {
         PendingIntent piAl = PendingIntent.getActivity(this, idAviso * 2 + 1, verAl,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Notification n = new Notification.Builder(this, CANAL_AVISOS)
+        Notification n = new Notification.Builder(this, canal)
                 .setSmallIcon(R.drawable.ic_avion)
                 .setContentTitle(titulo)
                 .setSubText(nombreAlerta)
@@ -688,11 +689,8 @@ public class VigilanciaService extends Service {
         serv.setDescription("Notificación fija mientras la app vigila");
         nm.createNotificationChannel(serv);
 
-        NotificationChannel av = new NotificationChannel(CANAL_AVISOS, "Aeronaves encima",
-                NotificationManager.IMPORTANCE_HIGH);
-        av.setDescription("Aviso cuando un avión o helicóptero entra en tu radio");
-        av.enableVibration(true);
-        nm.createNotificationChannel(av);
+        // Ahora cada alerta tiene su canal (con su sonido); el canal único de antes sobra
+        nm.deleteNotificationChannel(CANAL_AVISOS);
     }
 
     private Notification notificacionServicio(String texto) {

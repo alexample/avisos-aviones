@@ -27,6 +27,11 @@ final class Alertas {
             JSONArray arr = new JSONArray(json);
             for (int i = 0; i < arr.length(); i++) lista.add(Alerta.deJson(arr.getJSONObject(i)));
         } catch (Exception ignored) {}
+        if (!p.getBoolean("semilla_sonidos_v1", false)) {
+            for (Alerta a : lista) if (a.sonido.isEmpty()) a.sonido = sonidoSugerido(a);
+            p.edit().putBoolean("semilla_sonidos_v1", true).apply();
+            guardar(c, lista);
+        }
         if (!p.getBoolean("semilla_alerta_pegasus_v1", false)) {
             lista.add(alertaPegasus());
             p.edit().putBoolean("semilla_alerta_pegasus_v1", true).apply();
@@ -69,6 +74,15 @@ final class Alertas {
         return max;
     }
 
+    /** Sonido que encaja con lo que vigila la alerta. */
+    static String sonidoSugerido(Alerta a) {
+        if (a.servicios.contains("dgt") || a.soloEmergencia || a.servicios.contains("policia")) return "raw:sirena";
+        if (a.clases.size() == 1 && Tipos.HELI.equals(a.clases.get(0))) return "raw:rotor";
+        if (a.soloMilitar) return "raw:radar";
+        if (a.clases.size() == 1 && Tipos.GRANDE.equals(a.clases.get(0))) return "raw:reactor";
+        return Sonidos.POR_DEFECTO;
+    }
+
     /** Alerta lista para usar con los helicópteros Pegasus de la DGT. */
     private static Alerta alertaPegasus() {
         Alerta a = new Alerta();
@@ -76,6 +90,7 @@ final class Alertas {
         a.servicios.add("dgt");
         a.radioKm = 30;
         a.activa = true;
+        a.sonido = "raw:sirena";
         return a;
     }
 

@@ -48,6 +48,8 @@ public class AlertaActivity extends Activity {
     private final List<TextView> chipsTipo = new ArrayList<>();
     private TextView chipMilitar, chipEmergencia;
     private final List<TextView> chipsServicio = new ArrayList<>();
+    private TextView txtSonido;
+    private static final int REQ_SONIDO = 7;
     private ViewGroup chipsModelo;
     private ViewGroup chipsOrigen, chipsDestino;
     private ScrollView scroll;
@@ -279,6 +281,29 @@ public class AlertaActivity extends Activity {
         });
         col.addView(tMas, Ui.ancho(12, this));
 
+        // ---------- Sonido
+        LinearLayout tSon = Ui.tarjeta(this, "🔊 Sonido del aviso", null);
+        LinearLayout filaSon = new LinearLayout(this);
+        filaSon.setGravity(Gravity.CENTER_VERTICAL);
+        txtSonido = Ui.texto(this, "", 16, Ui.TEXTO, false);
+        filaSon.addView(txtSonido, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView probar = Ui.texto(this, "▶ Probar", 15, Ui.AZUL, true);
+        probar.setPadding(dp(12), dp(8), dp(4), dp(8));
+        probar.setOnClickListener(v -> Sonidos.probar(this, alerta.sonido));
+        filaSon.addView(probar);
+        tSon.addView(filaSon, Ui.ancho(8, this));
+        TextView cambiar = Ui.botonSecundario(this, "Cambiar sonido");
+        cambiar.setOnClickListener(v -> elegirSonido());
+        tSon.addView(cambiar, Ui.ancho(10, this));
+        Switch swVibrar = new Switch(this);
+        swVibrar.setText("Vibrar");
+        swVibrar.setTextSize(15);
+        swVibrar.setTextColor(Ui.TEXTO);
+        swVibrar.setChecked(alerta.vibrar);
+        swVibrar.setOnCheckedChangeListener((b, on) -> alerta.vibrar = on);
+        tSon.addView(swVibrar, Ui.ancho(12, this));
+        col.addView(tSon, Ui.ancho(12, this));
+
         // ---------- Botones
         TextView guardar = Ui.botonPrincipal(this, "Guardar alerta", Ui.AZUL);
         guardar.setOnClickListener(v -> guardar());
@@ -289,7 +314,11 @@ public class AlertaActivity extends Activity {
             borrar.setPadding(0, dp(16), 0, dp(8));
             borrar.setOnClickListener(v -> new AlertDialog.Builder(this)
                     .setMessage("¿Eliminar «" + alerta.nombre + "»?")
-                    .setPositiveButton("Eliminar", (d, w) -> { Alertas.borrar(this, alerta.id); finish(); })
+                    .setPositiveButton("Eliminar", (d, w) -> {
+                        Alertas.borrar(this, alerta.id);
+                        Sonidos.borrarCanales(this, alerta.id);
+                        finish();
+                    })
                     .setNegativeButton("Cancelar", null)
                     .show());
             col.addView(borrar);
@@ -306,6 +335,7 @@ public class AlertaActivity extends Activity {
         refrescarDistancias();
         refrescarAltitud();
         refrescarServicios();
+        refrescarSonido();
         pintarChipsModelos();
         pintarChipsAeropuertos(alerta.origenes, chipsOrigen);
         pintarChipsAeropuertos(alerta.destinos, chipsDestino);
@@ -373,6 +403,66 @@ public class AlertaActivity extends Activity {
         if (alerta.soloEmergencia) sb.append("\nEmergencia = squawk 7700 (emergencia), 7600 (fallo de radio) o 7500 (secuestro).");
         if (alerta.soloMilitar) sb.append("\nMilitar = marcado así en la base de datos de airplanes.live.");
         txtTipoAyuda.setText(sb.toString());
+    }
+
+    // ------------------------------------------------------------ sonido
+
+    private void refrescarSonido() {
+        txtSonido.setText(Sonidos.nombre(this, alerta.sonido));
+    }
+
+    private void elegirSonido() {
+        int n = Sonidos.PROPIOS.length;
+        String[] opciones = new String[n + 3];
+        String[] valores = new String[n + 3];
+        for (int i = 0; i < n; i++) { opciones[i] = Sonidos.PROPIOS[i][1]; valores[i] = "raw:" + Sonidos.PROPIOS[i][0]; }
+        opciones[n] = "📱 El del móvil";           valores[n] = Sonidos.POR_DEFECTO;
+        opciones[n + 1] = "🎶 Elegir otro del móvil…"; valores[n + 1] = null;
+        opciones[n + 2] = "🔕 Sin sonido";          valores[n + 2] = Sonidos.SILENCIO;
+        int marcado = -1;
+        for (int i = 0; i < valores.length; i++) if (valores[i] != null && valores[i].equals(alerta.sonido)) marcado = i;
+        final String anterior = alerta.sonido;
+        new AlertDialog.Builder(this)
+                .setTitle("Sonido para «" + nombre.getText().toString().trim() + "»")
+                .setSingleChoiceItems(opciones, marcado, (d, i) -> {
+                    if (valores[i] == null) {
+                        d.dismiss();
+                        Sonidos.parar();
+                        Intent pick = new Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER)
+                                .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
+                                        android.media.RingtoneManager.TYPE_NOTIFICATION | android.media.RingtoneManager.TYPE_RINGTONE
+                                                | android.media.RingtoneManager.TYPE_ALARM)
+                                .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, "Sonido del aviso")
+                                .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, false);
+                        startActivityForResult(pick, REQ_SONIDO);
+                        return;
+                    }
+                    alerta.sonido = valores[i];
+                    Sonidos.probar(this, alerta.sonido);
+                    refrescarSonido();
+                })
+                .setPositiveButton("Aceptar", (d, w) -> Sonidos.parar())
+                .setNegativeButton("Cancelar", (d, w) -> { Sonidos.parar(); alerta.sonido = anterior; refrescarSonido(); })
+                .show();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_SONIDO && resultCode == RESULT_OK && data != null) {
+            android.net.Uri u = data.getParcelableExtra(android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI);
+            if (u != null) {
+                alerta.sonido = u.toString();
+                refrescarSonido();
+            }
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        Sonidos.parar();
     }
 
     // ------------------------------------------------------------ servicios

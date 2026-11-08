@@ -25,6 +25,8 @@ final class Alerta {
     boolean soloEmergencia = false;
     final List<String> modelos = new ArrayList<>();    // códigos OACI (A20N, B738, EC35…), admite *
     final List<String> servicios = new ArrayList<>();  // etiquetas del usuario (Servicios.IDS)
+    String sonido = Sonidos.POR_DEFECTO;               // "", "silencio", "raw:sirena" o uri del móvil
+    boolean vibrar = true;
     final List<String> origenes = new ArrayList<>();   // códigos IATA
     final List<String> destinos = new ArrayList<>();
     int altMaxM = 0;               // 0 = cualquier altitud
@@ -204,6 +206,8 @@ final class Alerta {
             o.put("solo_emergencia", soloEmergencia);
             o.put("modelos", new JSONArray(modelos));
             o.put("servicios", new JSONArray(servicios));
+            o.put("sonido", sonido);
+            o.put("vibrar", vibrar);
             o.put("origenes", new JSONArray(origenes));
             o.put("destinos", new JSONArray(destinos));
             o.put("alt_max_m", altMaxM);
@@ -240,6 +244,8 @@ final class Alerta {
                 default: break;
             }
         }
+        a.sonido = o.optString("sonido", Sonidos.POR_DEFECTO);
+        a.vibrar = o.optBoolean("vibrar", true);
         JSONArray se = o.optJSONArray("servicios");
         if (se != null) for (int i = 0; i < se.length(); i++) a.servicios.add(se.optString(i));
         JSONArray mo = o.optJSONArray("modelos");
