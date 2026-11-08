@@ -19,7 +19,7 @@
     <application
         android:label="Avisos Aviones"
         android:icon="@drawable/ic_avion"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:theme="@style/Tema"
         android:allowBackup="true">
 
         <activity
@@ -30,6 +30,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".AlertaActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".HistorialActivity"

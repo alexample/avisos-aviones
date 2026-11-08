@@ -2,14 +2,13 @@ package es.avisosaviones;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -17,13 +16,10 @@ import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.InputType;
-import android.view.View;
+import android.view.Gravity;
 import android.view.ViewGroup;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -35,29 +31,14 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private static final int REQ_PERMISOS = 1;
-    private static final int ID_DENTRO = 1001, ID_FUERA = 1002, ID_AMBAS = 1003;
 
-    /** Campo con interruptor: el interruptor activa/desactiva el filtro sin borrar el valor. */
-    private static final class Filtro {
-        final String clave;
-        final Switch sw;
-        final EditText campo;
-        Filtro(String clave, Switch sw, EditText campo) { this.clave = clave; this.sw = sw; this.campo = campo; }
-    }
-
-    private EditText radio, radioExt, intervalo;
-    private Switch soloHeli;
-    private RadioGroup zona;
-    private LinearLayout bloqueRadioExt;
-    private Filtro fDistMin, fAltitud, fMat, fInd, fSqk, fOri, fDes;
-    private final List<Filtro> filtros = new ArrayList<>();
-    private Button boton;
-    private TextView estado;
+    private TextView boton, estadoTitulo, estadoDetalle, punto;
+    private LinearLayout listaAlertas;
 
     private final BroadcastReceiver receptorEstado = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String txt = intent.getStringExtra(VigilanciaService.EXTRA_TEXTO);
-            if (txt != null) estado.setText(txt);
+            if (txt != null) mostrarEstado(txt);
             refrescarBoton();
         }
     };
@@ -65,20 +46,18 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        construirInterfaz();
-        cargarAjustes();
+        getWindow().setStatusBarColor(Ui.AZUL_OSCURO);
+        construir();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         IntentFilter f = new IntentFilter(VigilanciaService.ACCION_ESTADO);
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(receptorEstado, f, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(receptorEstado, f);
-        }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(receptorEstado, f, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(receptorEstado, f);
         refrescarBoton();
+        pintarAlertas();
     }
 
     @Override
@@ -87,270 +66,220 @@ public class MainActivity extends Activity {
         unregisterReceiver(receptorEstado);
     }
 
+    private int dp(float v) { return Ui.dp(this, v); }
+
     // ================================================================ interfaz
 
-    private void construirInterfaz() {
-        int pad = dp(16);
+    private void construir() {
+        LinearLayout raiz = new LinearLayout(this);
+        raiz.setOrientation(LinearLayout.VERTICAL);
+        raiz.setBackgroundColor(Ui.FONDO);
+
+        // ---------- Cabecera
+        LinearLayout cab = new LinearLayout(this);
+        cab.setOrientation(LinearLayout.VERTICAL);
+        cab.setPadding(dp(20), dp(20), dp(20), dp(22));
+        GradientDrawable deg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{Ui.AZUL_OSCURO, Color.parseColor("#1D4E89")});
+        float r = dp(28);
+        deg.setCornerRadii(new float[]{0, 0, 0, 0, r, r, r, r});
+        cab.setBackground(deg);
+
+        LinearLayout filaTitulo = new LinearLayout(this);
+        filaTitulo.setGravity(Gravity.CENTER_VERTICAL);
+        TextView titulo = Ui.texto(this, "✈️  Avisos Aviones", 24, Color.WHITE, true);
+        filaTitulo.addView(titulo, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView ajustes = Ui.texto(this, "⚙️", 22, Color.WHITE, false);
+        ajustes.setPadding(dp(10), dp(4), dp(4), dp(4));
+        ajustes.setOnClickListener(v -> abrirAjustes());
+        filaTitulo.addView(ajustes);
+        cab.addView(filaTitulo);
+
+        LinearLayout filaEstado = new LinearLayout(this);
+        filaEstado.setGravity(Gravity.CENTER_VERTICAL);
+        punto = new TextView(this);
+        filaEstado.addView(punto, new LinearLayout.LayoutParams(dp(10), dp(10)));
+        estadoTitulo = Ui.texto(this, "", 16, Color.WHITE, true);
+        estadoTitulo.setPadding(dp(8), 0, 0, 0);
+        filaEstado.addView(estadoTitulo);
+        cab.addView(filaEstado, Ui.ancho(16, this));
+
+        estadoDetalle = Ui.texto(this, "", 13, Color.parseColor("#B9CCE6"), false);
+        cab.addView(estadoDetalle, Ui.ancho(4, this));
+
+        boton = Ui.texto(this, "", 17, Ui.AZUL_OSCURO, true);
+        boton.setGravity(Gravity.CENTER);
+        boton.setPadding(0, dp(15), 0, dp(15));
+        boton.setClickable(true);
+        boton.setOnClickListener(v -> alternar());
+        cab.addView(boton, Ui.ancho(18, this));
+        raiz.addView(cab);
+
+        // ---------- Cuerpo
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(pad, pad + dp(24), pad, pad);
+        col.setPadding(dp(16), dp(8), dp(16), dp(24));
 
-        TextView titulo = new TextView(this);
-        titulo.setText("✈️ Avisos Aviones");
-        titulo.setTextSize(26);
-        titulo.setTypeface(Typeface.DEFAULT_BOLD);
-        col.addView(titulo);
+        LinearLayout filaAlertas = new LinearLayout(this);
+        filaAlertas.setGravity(Gravity.CENTER_VERTICAL);
+        TextView tAl = Ui.texto(this, "Mis alertas", 20, Ui.TEXTO, true);
+        filaAlertas.addView(tAl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView nueva = Ui.texto(this, "＋ Nueva", 15, Color.WHITE, true);
+        nueva.setPadding(dp(16), dp(9), dp(16), dp(9));
+        nueva.setBackground(Ui.pulsable(Ui.AZUL, 20, this));
+        nueva.setOnClickListener(v -> startActivity(new Intent(this, AlertaActivity.class)));
+        filaAlertas.addView(nueva);
+        col.addView(filaAlertas, Ui.ancho(14, this));
 
-        // ---------- Arriba: lo que más se usa
-        boton = new Button(this);
-        boton.setTextSize(18);
-        boton.setOnClickListener(v -> alternar());
-        LinearLayout.LayoutParams lpBoton = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60));
-        lpBoton.topMargin = dp(12);
-        col.addView(boton, lpBoton);
+        TextView expl = Ui.texto(this, "Te aviso cuando una aeronave cumple cualquiera de las alertas encendidas.",
+                13, Ui.TEXTO_SUAVE, false);
+        col.addView(expl, Ui.ancho(4, this));
 
-        estado = new TextView(this);
-        estado.setPadding(0, dp(8), 0, dp(4));
-        estado.setText("Parado.");
-        col.addView(estado);
+        listaAlertas = new LinearLayout(this);
+        listaAlertas.setOrientation(LinearLayout.VERTICAL);
+        col.addView(listaAlertas, Ui.ancho(4, this));
 
-        Button historial = new Button(this);
-        historial.setText("📋 Historial de pasos");
+        TextView historial = Ui.botonSecundario(this, "📋  Historial de pasos");
         historial.setOnClickListener(v -> startActivity(new Intent(this, HistorialActivity.class)));
-        col.addView(historial);
+        col.addView(historial, Ui.ancho(18, this));
 
-        // ---------- 1. Zona
-        LinearLayout zonaTarjeta = tarjeta(col, "📍 Zona");
-        radio = campoSimple(zonaTarjeta, "Radio de aviso (km)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-
-        etiqueta(zonaTarjeta, "Avisar de los que están:");
-        zona = new RadioGroup(this);
-        zona.addView(opcion(ID_DENTRO, "Dentro del radio de aviso"));
-        zona.addView(opcion(ID_FUERA, "Fuera del radio (hasta el radio ampliado)"));
-        zona.addView(opcion(ID_AMBAS, "Dentro y fuera (hasta el radio ampliado)"));
-        zona.setOnCheckedChangeListener((g, id) -> bloqueRadioExt.setVisibility(id == ID_DENTRO ? View.GONE : View.VISIBLE));
-        zonaTarjeta.addView(zona);
-
-        bloqueRadioExt = new LinearLayout(this);
-        bloqueRadioExt.setOrientation(LinearLayout.VERTICAL);
-        radioExt = campoSimple(bloqueRadioExt, "Radio ampliado (km)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        zonaTarjeta.addView(bloqueRadioExt);
-
-        fDistMin = filtro(zonaTarjeta, Ajustes.DIST_MIN_KM, "Distancia mínima (km)",
-                "No avisar de lo que esté más cerca de esto", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-
-        // ---------- 2. Aeronave
-        LinearLayout aeroTarjeta = tarjeta(col, "✈️ Aeronave");
-        soloHeli = new Switch(this);
-        soloHeli.setText("Solo helicópteros 🚁");
-        soloHeli.setPadding(0, dp(6), 0, dp(6));
-        aeroTarjeta.addView(soloHeli);
-        int texto = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
-        fAltitud = filtro(aeroTarjeta, Ajustes.ALTITUD_MAX_M, "Altitud máxima (m)", "ej: 3000", InputType.TYPE_CLASS_NUMBER);
-        fMat = filtro(aeroTarjeta, Ajustes.F_MATRICULAS, "Matrículas", "ej: EC-MXV, EC-*", texto);
-        fInd = filtro(aeroTarjeta, Ajustes.F_INDICATIVOS, "Indicativos", "ej: IBE*, !RYR*", texto);
-        fSqk = filtro(aeroTarjeta, Ajustes.F_SQUAWK, "Squawk", "ej: 7700, 7600, 7500", texto);
-
-        // ---------- 3. Ruta
-        LinearLayout rutaTarjeta = tarjeta(col, "🛫 Ruta (código IATA)");
-        fOri = filtro(rutaTarjeta, Ajustes.F_ORIGEN, "Origen", "ej: MAD, BCN", texto);
-        fDes = filtro(rutaTarjeta, Ajustes.F_DESTINO, "Destino", "ej: LHR, PMI", texto);
-
-        TextView ayuda = new TextView(this);
-        ayuda.setTextSize(12);
-        ayuda.setPadding(dp(4), dp(8), dp(4), 0);
-        ayuda.setText("Cada filtro tiene su interruptor: apagado se ignora pero guarda lo escrito. "
-                + "Vacío = sin filtro. Varios valores con comas; * es comodín; ! delante excluye.");
-        col.addView(ayuda);
-
-        Button guardar = new Button(this);
-        guardar.setText("💾 Guardar ajustes");
-        guardar.setOnClickListener(v -> {
-            if (guardarAjustes()) Toast.makeText(this,
-                    Ajustes.activo(this) ? "Guardado. Se aplica en la próxima comprobación." : "Guardado.",
-                    Toast.LENGTH_SHORT).show();
-        });
-        LinearLayout.LayoutParams lpG = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpG.topMargin = dp(8);
-        col.addView(guardar, lpG);
-
-        // ---------- 4. Avanzado
-        LinearLayout avTarjeta = tarjeta(col, "⚙️ Avanzado");
-        intervalo = campoSimple(avTarjeta, "Comprobar cada (segundos, mínimo 5)", InputType.TYPE_CLASS_NUMBER);
-        Button bateria = new Button(this);
-        bateria.setText("Quitar ahorro de batería (recomendado)");
-        bateria.setOnClickListener(v -> pedirSinOptimizacionBateria());
-        avTarjeta.addView(bateria);
-
-        TextView nota = new TextView(this);
-        nota.setTextSize(12);
-        nota.setPadding(dp(4), dp(16), dp(4), 0);
-        nota.setText("Datos: airplanes.live / adsb.lol, rutas de Flightradar24 y adsbdb. "
-                + "Los aparatos que no emiten ADS-B (muchos helicópteros militares o policiales) no aparecen.");
-        col.addView(nota);
+        TextView nota = Ui.texto(this, "Datos: airplanes.live y adsb.lol · rutas de Flightradar24 y adsbdb. "
+                + "Los aparatos que no emiten ADS-B (muchos helicópteros militares o policiales) no aparecen.",
+                12, Ui.TEXTO_SUAVE, false);
+        nota.setPadding(dp(4), 0, dp(4), 0);
+        col.addView(nota, Ui.ancho(16, this));
 
         ScrollView sv = new ScrollView(this);
         sv.addView(col);
-        setContentView(sv);
+        raiz.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        setContentView(raiz);
+        mostrarEstado(null);
     }
 
-    private LinearLayout tarjeta(LinearLayout padre, String titulo) {
-        LinearLayout t = new LinearLayout(this);
-        t.setOrientation(LinearLayout.VERTICAL);
-        t.setPadding(dp(14), dp(10), dp(14), dp(12));
-        GradientDrawable fondo = new GradientDrawable();
-        fondo.setColor(Color.parseColor("#F1F5FA"));
-        fondo.setCornerRadius(dp(14));
-        t.setBackground(fondo);
-
-        TextView tt = new TextView(this);
-        tt.setText(titulo);
-        tt.setTextSize(18);
-        tt.setTypeface(Typeface.DEFAULT_BOLD);
-        t.addView(tt);
-
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(14);
-        padre.addView(t, lp);
-        return t;
-    }
-
-    private void etiqueta(LinearLayout padre, String txt) {
-        TextView t = new TextView(this);
-        t.setText(txt);
-        t.setPadding(0, dp(8), 0, 0);
-        padre.addView(t);
-    }
-
-    private EditText campoSimple(LinearLayout padre, String etiqueta, int tipo) {
-        etiqueta(padre, etiqueta);
-        EditText e = new EditText(this);
-        e.setInputType(tipo);
-        e.setSingleLine(true);
-        padre.addView(e);
-        return e;
-    }
-
-    private Filtro filtro(LinearLayout padre, String clave, String etiqueta, String pista, int tipo) {
-        Switch sw = new Switch(this);
-        sw.setText(etiqueta);
-        sw.setPadding(0, dp(10), 0, 0);
-        padre.addView(sw);
-        EditText e = new EditText(this);
-        e.setInputType(tipo);
-        e.setSingleLine(true);
-        e.setHint(pista);
-        padre.addView(e);
-        sw.setOnCheckedChangeListener((b, on) -> { e.setEnabled(on); e.setAlpha(on ? 1f : 0.4f); });
-        Filtro f = new Filtro(clave, sw, e);
-        filtros.add(f);
-        return f;
-    }
-
-    private RadioButton opcion(int id, String txt) {
-        RadioButton rb = new RadioButton(this);
-        rb.setId(id);
-        rb.setText(txt);
-        return rb;
-    }
-
-    // ================================================================ ajustes
-
-    private static String numero(float f) {
-        return f == (int) f ? String.valueOf((int) f) : String.valueOf(f);
-    }
-
-    private static float leerFloat(EditText e, float porDefecto) {
-        String t = e.getText().toString().trim().replace(',', '.');
-        return t.isEmpty() ? porDefecto : Float.parseFloat(t);
-    }
-
-    private void cargarAjustes() {
-        SharedPreferences p = Ajustes.prefs(this);
-        radio.setText(numero(Ajustes.radioKm(this)));
-        radioExt.setText(numero(Ajustes.radioExtKm(this)));
-        intervalo.setText(String.valueOf(Ajustes.intervaloS(this)));
-        soloHeli.setChecked(Ajustes.soloHelicopteros(this));
-        int mz = Ajustes.modoZona(this);
-        zona.check(mz == Ajustes.ZONA_FUERA ? ID_FUERA : mz == Ajustes.ZONA_AMBAS ? ID_AMBAS : ID_DENTRO);
-        bloqueRadioExt.setVisibility(mz == Ajustes.ZONA_DENTRO ? View.GONE : View.VISIBLE);
-
-        fDistMin.campo.setText(numero(p.getFloat(Ajustes.DIST_MIN_KM, 0f)));
-        int alt = p.getInt(Ajustes.ALTITUD_MAX_M, 0);
-        fAltitud.campo.setText(alt > 0 ? String.valueOf(alt) : "");
-        for (Filtro f : new Filtro[]{fMat, fInd, fSqk, fOri, fDes}) {
-            f.campo.setText(p.getString(f.clave, ""));
+    private void pintarAlertas() {
+        listaAlertas.removeAllViews();
+        List<Alerta> lista = Alertas.cargar(this);
+        if (lista.isEmpty()) {
+            LinearLayout vacia = Ui.tarjeta(this, "Sin alertas", "Pulsa «＋ Nueva» para crear la primera.");
+            listaAlertas.addView(vacia, Ui.ancho(10, this));
+            return;
         }
-        for (Filtro f : filtros) {
-            boolean on = Ajustes.usa(this, f.clave);
-            f.sw.setChecked(on);
-            f.campo.setEnabled(on);
-            f.campo.setAlpha(on ? 1f : 0.4f);
+        for (Alerta a : lista) {
+            LinearLayout t = new LinearLayout(this);
+            t.setGravity(Gravity.CENTER_VERTICAL);
+            t.setPadding(dp(14), dp(14), dp(10), dp(14));
+            t.setBackground(Ui.pulsable(Color.WHITE, 18, this));
+            t.setElevation(dp(1.5f));
+
+            TextView icono = Ui.texto(this, a.icono(), 22, Ui.TEXTO, false);
+            icono.setGravity(Gravity.CENTER);
+            icono.setBackground(Ui.redondeado(a.activa ? Ui.AZUL_CLARO : Color.parseColor("#EEF1F5"), 14, this));
+            t.addView(icono, new LinearLayout.LayoutParams(dp(46), dp(46)));
+
+            LinearLayout textos = new LinearLayout(this);
+            textos.setOrientation(LinearLayout.VERTICAL);
+            textos.setPadding(dp(12), 0, dp(8), 0);
+            TextView n = Ui.texto(this, a.nombre, 16, a.activa ? Ui.TEXTO : Ui.TEXTO_SUAVE, true);
+            TextView s = Ui.texto(this, a.resumen(), 13, Ui.TEXTO_SUAVE, false);
+            textos.addView(n);
+            textos.addView(s);
+            t.addView(textos, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            Switch sw = new Switch(this);
+            sw.setChecked(a.activa);
+            sw.setOnCheckedChangeListener((b, on) -> {
+                a.activa = on;
+                Alertas.guardarUna(this, a);
+                pintarAlertas();
+            });
+            t.addView(sw);
+
+            t.setOnClickListener(v -> startActivity(new Intent(this, AlertaActivity.class)
+                    .putExtra(AlertaActivity.EXTRA_ID, a.id)));
+            listaAlertas.addView(t, Ui.ancho(10, this));
         }
     }
 
-    private boolean guardarAjustes() {
-        try {
-            float r = leerFloat(radio, 2f);
-            String ti = intervalo.getText().toString().trim();
-            int i = ti.isEmpty() ? 15 : Integer.parseInt(ti);
-            if (r <= 0 || r > 400) throw new NumberFormatException();
-            if (i < 5) i = 5;
-            float ext = leerFloat(radioExt, 50f);
-            float min = leerFloat(fDistMin.campo, 0f);
-            String ta = fAltitud.campo.getText().toString().trim();
-            int alt = ta.isEmpty() ? 0 : Integer.parseInt(ta);
-            if (ext <= 0 || ext > 400 || min < 0 || alt < 0) throw new NumberFormatException();
-            int idZona = zona.getCheckedRadioButtonId();
-            int modo = idZona == ID_FUERA ? Ajustes.ZONA_FUERA : idZona == ID_AMBAS ? Ajustes.ZONA_AMBAS : Ajustes.ZONA_DENTRO;
-            if (modo != Ajustes.ZONA_DENTRO && ext <= r) {
-                Toast.makeText(this, "El radio ampliado tiene que ser mayor que el radio de aviso", Toast.LENGTH_LONG).show();
-                return false;
-            }
-            SharedPreferences.Editor ed = Ajustes.prefs(this).edit()
-                    .putFloat(Ajustes.RADIO_KM, r)
-                    .putFloat(Ajustes.RADIO_EXT_KM, ext)
-                    .putInt(Ajustes.MODO_ZONA, modo)
-                    .putInt(Ajustes.INTERVALO_S, i)
-                    .putBoolean(Ajustes.SOLO_HELICOPTEROS, soloHeli.isChecked())
-                    .putFloat(Ajustes.DIST_MIN_KM, min)
-                    .putInt(Ajustes.ALTITUD_MAX_M, alt);
-            for (Filtro f : new Filtro[]{fMat, fInd, fSqk, fOri, fDes}) {
-                ed.putString(f.clave, f.campo.getText().toString().trim());
-            }
-            for (Filtro f : filtros) {
-                ed.putBoolean(Ajustes.claveUsar(f.clave), f.sw.isChecked());
-            }
-            ed.apply();
-            return true;
-        } catch (NumberFormatException ex) {
-            Toast.makeText(this, "Revisa los números (radios entre 0 y 400 km, nada negativo)", Toast.LENGTH_LONG).show();
-            return false;
+    private void mostrarEstado(String txt) {
+        boolean on = Ajustes.activo(this);
+        punto.setBackground(Ui.redondeado(on ? Color.parseColor("#4ADE80") : Color.parseColor("#94A3B8"), 5, this));
+        if (!on) {
+            estadoTitulo.setText("Parado");
+            int activas = 0;
+            for (Alerta a : Alertas.cargar(this)) if (a.activa) activas++;
+            estadoDetalle.setText(activas == 0 ? "No hay alertas encendidas"
+                    : activas + (activas == 1 ? " alerta encendida" : " alertas encendidas") + ". Pulsa empezar.");
+            return;
         }
+        if (txt == null) {
+            estadoTitulo.setText("Vigilando…");
+            estadoDetalle.setText("Buscando tu ubicación");
+            return;
+        }
+        int salto = txt.indexOf('\n');
+        estadoTitulo.setText(salto > 0 ? txt.substring(0, salto) : txt);
+        estadoDetalle.setText(salto > 0 ? txt.substring(salto + 1) : "");
+    }
+
+    private void refrescarBoton() {
+        boolean on = Ajustes.activo(this);
+        boton.setText(on ? "⏹   Parar vigilancia" : "▶   Empezar a vigilar");
+        boton.setTextColor(on ? Color.WHITE : Ui.AZUL_OSCURO);
+        boton.setBackground(Ui.pulsable(on ? Color.parseColor("#33FFFFFF") : Color.WHITE, 16, this));
+        if (!on) mostrarEstado(null);
+    }
+
+    private void abrirAjustes() {
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(dp(24), dp(8), dp(24), 0);
+        l.addView(Ui.texto(this, "Comprobar cada (segundos)", 15, Ui.TEXTO, false));
+        EditText inter = new EditText(this);
+        inter.setInputType(InputType.TYPE_CLASS_NUMBER);
+        inter.setText(String.valueOf(Ajustes.intervaloS(this)));
+        l.addView(inter);
+        TextView bat = Ui.botonSecundario(this, "🔋 Quitar ahorro de batería");
+        bat.setOnClickListener(v -> pedirSinOptimizacionBateria());
+        l.addView(bat, Ui.ancho(12, this));
+        l.addView(Ui.texto(this, "Recomendado: si no, Android puede dormir la app y dejarías de recibir avisos.",
+                12, Ui.TEXTO_SUAVE, false), Ui.ancho(6, this));
+
+        new AlertDialog.Builder(this)
+                .setTitle("Ajustes")
+                .setView(l)
+                .setPositiveButton("Guardar", (d, w) -> {
+                    int i = 15;
+                    try { i = Integer.parseInt(inter.getText().toString().trim()); } catch (Exception ignored) {}
+                    Ajustes.prefs(this).edit().putInt(Ajustes.INTERVALO_S, Math.max(5, i)).apply();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
     }
 
     // ================================================================ vigilancia
 
     private void alternar() {
         if (Ajustes.activo(this)) {
-            Intent i = new Intent(this, VigilanciaService.class).setAction(VigilanciaService.ACCION_PARAR);
-            startService(i);
+            startService(new Intent(this, VigilanciaService.class).setAction(VigilanciaService.ACCION_PARAR));
             Ajustes.prefs(this).edit().putBoolean(Ajustes.ACTIVO, false).apply();
-            estado.setText("Parado.");
             refrescarBoton();
             return;
         }
-        if (!guardarAjustes()) return;
+        boolean alguna = false;
+        for (Alerta a : Alertas.cargar(this)) if (a.activa) alguna = true;
+        if (!alguna) {
+            Toast.makeText(this, "Enciende al menos una alerta", Toast.LENGTH_LONG).show();
+            return;
+        }
         if (pedirPermisosSiFaltan()) return; // seguirá en onRequestPermissionsResult
         arrancar();
     }
 
     private void arrancar() {
-        Intent i = new Intent(this, VigilanciaService.class);
-        startForegroundService(i);
+        startForegroundService(new Intent(this, VigilanciaService.class));
         Ajustes.prefs(this).edit().putBoolean(Ajustes.ACTIVO, true).apply();
-        estado.setText("Iniciando… buscando tu ubicación.");
         refrescarBoton();
+        mostrarEstado(null);
     }
 
     /** @return true si ha tenido que pedir permisos. */
@@ -376,7 +305,7 @@ public class MainActivity extends Activity {
         boolean ubicacion = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
         if (!ubicacion) {
-            Toast.makeText(this, "Sin permiso de ubicación no puedo saber qué tienes encima.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Sin permiso de ubicación no puedo saber qué tienes cerca.", Toast.LENGTH_LONG).show();
             return;
         }
         arrancar();
@@ -395,14 +324,5 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
         }
-    }
-
-    private void refrescarBoton() {
-        boolean on = Ajustes.activo(this);
-        boton.setText(on ? "⏹  Parar vigilancia" : "▶  Empezar a vigilar");
-    }
-
-    private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
     }
 }

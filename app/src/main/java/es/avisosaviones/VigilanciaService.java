@@ -29,9 +29,11 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -175,60 +177,48 @@ public class VigilanciaService extends Service {
             return;
         }
 
-        double radioKm = Ajustes.radioKm(this);
-        double distMinKm = Ajustes.distMinKm(this);
-        int modoZona = Ajustes.modoZona(this);
-        double radioExtKm = Math.max(radioKm, Ajustes.radioExtKm(this));
-        int altMaxM = Ajustes.altitudMaxM(this);
-        boolean soloHeli = Ajustes.soloHelicopteros(this);
-        String fMat = Ajustes.fMatriculas(this);
-        String fInd = Ajustes.fIndicativos(this);
-        String fOri = Ajustes.fOrigen(this);
-        String fDes = Ajustes.fDestino(this);
-        String fSqk = Ajustes.fSquawk(this);
-        boolean filtroRuta = !Ajustes.vacio(fOri) || !Ajustes.vacio(fDes);
-
-        double radioConsultaKm = modoZona == Ajustes.ZONA_DENTRO ? radioKm : radioExtKm;
+        List<Alerta> alertas = Alertas.cargar(this);
+        List<Alerta> activas = new ArrayList<>();
+        for (Alerta al : alertas) if (al.activa) activas.add(al);
+        if (activas.isEmpty()) {
+            publicarEstado("Sin alertas encendidas\nEnciende alguna en la app");
+            return;
+        }
+        double radioConsultaKm = Math.min(400, Alertas.radioMaximo(activas));
         int radioNm = (int) Math.max(1, Math.ceil(radioConsultaKm / 1.852));
 
         JSONArray aparatos = descargar(yo.getLatitude(), yo.getLongitude(), radioNm);
 
         Map<String, String[]> fr24 = null; // se descarga solo si hace falta, una vez por vuelta
-        int enRadio = 0, coinciden = 0;
+        int cerca = 0, coinciden = 0;
+        double masCerca = Double.MAX_VALUE;
         long ahora = System.currentTimeMillis();
         for (int i = 0; i < aparatos.length(); i++) {
             JSONObject a = aparatos.getJSONObject(i);
             if (!a.has("lat") || !a.has("lon")) continue;
+            if ("ground".equals(a.optString("alt_baro"))) continue;
 
             float[] d = new float[1];
             Location.distanceBetween(yo.getLatitude(), yo.getLongitude(),
                     a.getDouble("lat"), a.getDouble("lon"), d);
-            double distKm = d[0] / 1000.0;
-            boolean dentro = distKm <= radioKm;
-            if (dentro) enRadio++;
+            Alerta.Aeronave av = new Alerta.Aeronave();
+            av.distKm = d[0] / 1000.0;
+            if (av.distKm > radioConsultaKm) continue;
+            cerca++;
+            masCerca = Math.min(masCerca, av.distKm);
+            av.altM = altitudMetros(a);
+            av.heli = esHelicoptero(a);
+            av.militar = (a.optInt("dbFlags", 0) & 1) != 0;
+            av.emergencia = textoEmergencia(a.optString("squawk", "").trim(), a.optString("emergency", "none")) != null;
+            av.matricula = a.optString("r", "");
+            av.indicativo = a.optString("flight", "").trim();
 
-            // Zona
-            boolean enZona;
-            if (modoZona == Ajustes.ZONA_DENTRO) enZona = dentro && distKm >= distMinKm;
-            else if (modoZona == Ajustes.ZONA_FUERA) enZona = !dentro && distKm <= radioExtKm;
-            else enZona = distKm >= distMinKm && distKm <= radioExtKm;
-            if (!enZona) continue;
-
-            if ("ground".equals(a.optString("alt_baro"))) continue;
-            int altM = altitudMetros(a);
-            if (altMaxM > 0 && altM > altMaxM) continue;
-
-            boolean heli = esHelicoptero(a);
-            if (soloHeli && !heli) continue;
+            // Alertas que cumple sin mirar la ruta
+            List<Alerta> candidatas = new ArrayList<>();
+            for (Alerta al : activas) if (al.coincideSinRuta(av)) candidatas.add(al);
+            if (candidatas.isEmpty()) continue;
 
             String hex = a.optString("hex", "?").toUpperCase(Locale.ROOT);
-            String matricula = a.optString("r", "");
-            String indicativo = a.optString("flight", "").trim();
-            if (!Ajustes.coincide(fMat, matricula)) continue;
-            if (!Ajustes.coincide(fInd, indicativo)) continue;
-            if (!Ajustes.coincide(fSqk, a.optString("squawk", ""))) continue;
-
-            // Ya avisado hace poco: no hace falta mirar ruta
             Long ultimo = avisados.get(hex);
             if (ultimo != null && ahora - ultimo < ENFRIAMIENTO_MS) {
                 avisados.put(hex, ahora); // sigue en la zona: alarga el silencio
@@ -239,21 +229,26 @@ public class VigilanciaService extends Service {
             if (fr24 == null) fr24 = cargarFr24(yo.getLatitude(), yo.getLongitude(), radioConsultaKm);
             String[] datosFr24 = fr24.get(hex); // {id, origen, destino, vuelo, indicativo}
 
-            if (filtroRuta) {
-                String origen = datosFr24 != null ? datosFr24[1] : "";
-                String destino = datosFr24 != null ? datosFr24[2] : "";
-                if (origen.isEmpty() && destino.isEmpty()) {
-                    String[] r = obtenerRuta(indicativo); // adsbdb como respaldo
-                    origen = r[2];
-                    destino = r[3];
+            Alerta cumplida = null;
+            String origen = null, destino = null;
+            for (Alerta al : candidatas) {
+                if (!al.necesitaRuta()) { cumplida = al; break; }
+                if (origen == null) {
+                    origen = datosFr24 != null ? datosFr24[1] : "";
+                    destino = datosFr24 != null ? datosFr24[2] : "";
+                    if (origen.isEmpty() && destino.isEmpty()) {
+                        String[] r = obtenerRuta(av.indicativo); // adsbdb como respaldo
+                        origen = r[2];
+                        destino = r[3];
+                    }
                 }
-                if (!Ajustes.vacio(fOri) && (origen.isEmpty() || !Ajustes.coincide(fOri, origen))) continue;
-                if (!Ajustes.vacio(fDes) && (destino.isEmpty() || !Ajustes.coincide(fDes, destino))) continue;
+                if (al.coincideRuta(origen, destino)) { cumplida = al; break; }
             }
+            if (cumplida == null) continue;
 
             coinciden++;
             avisados.put(hex, ahora);
-            avisar(a, heli, distKm, altM, dentro, datosFr24);
+            avisar(a, av.heli, av.distKm, av.altM, av.distKm < 3, datosFr24, cumplida.nombre);
         }
 
         // Limpieza de la memoria de avisos
@@ -261,13 +256,16 @@ public class VigilanciaService extends Service {
         while (it.hasNext()) if (ahora - it.next().getValue() > ENFRIAMIENTO_MS) it.remove();
 
         String hora = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+        String titulo = cerca == 0 ? "Vigilando · cielo despejado"
+                : String.format(Locale.getDefault(), "Vigilando · %d %s (la más cercana a %s)",
+                    cerca, cerca == 1 ? "aeronave" : "aeronaves", Alerta.km((float) masCerca));
         String txt = String.format(Locale.getDefault(),
-                "Vigilando · %d en tu radio de %.1f km · %d cumplen tus filtros · %d consultados\nÚltima comprobación %s (precisión GPS ±%.0f m)%s",
-                enRadio, radioKm, coinciden, aparatos.length(), hora, yo.getAccuracy(),
-                estadoFr24.isEmpty() ? "" : "\n" + estadoFr24);
+                "%s\n%d cumplen tus alertas · comprobado a las %s · GPS ±%.0f m%s",
+                titulo, coinciden, hora, yo.getAccuracy(),
+                estadoFr24.isEmpty() ? "" : " · " + estadoFr24);
         publicarEstado(txt);
         actualizarNotificacionServicio(String.format(Locale.getDefault(),
-                "Vigilando · %d en tu radio · %s", enRadio, hora));
+                "Vigilando · %d cerca · %s", cerca, hora));
     }
 
     private JSONArray descargar(double lat, double lon, int radioNm) throws Exception {
@@ -314,7 +312,8 @@ public class VigilanciaService extends Service {
 
     // ---------------------------------------------------------------- notificaciones
 
-    private void avisar(JSONObject a, boolean heli, double distKm, int altM, boolean dentro, String[] fr24) {
+    private void avisar(JSONObject a, boolean heli, double distKm, int altM, boolean dentro, String[] fr24,
+                        String nombreAlerta) {
         String indicativo = a.optString("flight", "").trim();
         String matricula = a.optString("r", "").trim();
         String tipo = a.optString("t", "").trim();
@@ -416,6 +415,7 @@ public class VigilanciaService extends Service {
             e.put("callsign", indicativo);
             if (!vueloFr24.isEmpty()) e.put("vuelo", vueloFr24);
             e.put("dentro", dentro);
+            e.put("alerta", nombreAlerta);
             Registro.guardar(this, e);
         } catch (Exception ignored) {}
 
@@ -431,6 +431,7 @@ public class VigilanciaService extends Service {
         Notification n = new Notification.Builder(this, CANAL_AVISOS)
                 .setSmallIcon(R.drawable.ic_avion)
                 .setContentTitle(titulo)
+                .setSubText("🔔 " + nombreAlerta)
                 .setContentText(cuerpo.toString().replace("\n", " · "))
                 .setStyle(new Notification.BigTextStyle().bigText(cuerpo.toString()))
                 .setContentIntent(piFr24)

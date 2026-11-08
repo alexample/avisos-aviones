@@ -33,7 +33,9 @@ public class HistorialActivity extends Activity {
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(pad, pad + dp(24), pad, pad);
+        col.setPadding(pad, pad + dp(8), pad, pad);
+        col.setBackgroundColor(Ui.FONDO);
+        getWindow().setStatusBarColor(Ui.AZUL_OSCURO);
 
         TextView titulo = new TextView(this);
         titulo.setText("📋 Historial");
@@ -66,6 +68,8 @@ public class HistorialActivity extends Activity {
         col.addView(lista);
 
         ScrollView sv = new ScrollView(this);
+        sv.setBackgroundColor(Ui.FONDO);
+        sv.setFillViewport(true);
         sv.addView(col);
         setContentView(sv);
     }
@@ -114,6 +118,7 @@ public class HistorialActivity extends Activity {
             if (!rumbo.isEmpty()) linea3.append(" · rumbo ").append(rumbo);
             String ruta = e.optString("ruta");
             String emerg = e.optString("emergencia");
+            String alertaNombre = e.optString("alerta");
 
             String icono = (heli ? "🚁" : "✈️") + (e.optBoolean("militar") ? "🎖️" : "")
                     + (emerg.isEmpty() ? "" : "🚨");
@@ -122,10 +127,13 @@ public class HistorialActivity extends Activity {
                     + (emerg.isEmpty() ? "" : "  " + emerg)
                     + (linea2.length() > 0 ? "\n" + linea2 : "")
                     + (ruta.isEmpty() ? "" : "\n🛫 " + ruta)
-                    + "\n" + linea3);
+                    + "\n" + linea3
+                    + (alertaNombre.isEmpty() ? "" : "\n🔔 " + alertaNombre));
             t.setTextSize(15);
             t.setPadding(dp(12), dp(10), dp(12), dp(10));
-            t.setBackgroundColor(heli ? Color.parseColor("#FFF3E0") : Color.parseColor("#EEF5FD"));
+            t.setTextColor(Ui.TEXTO);
+            t.setBackground(Ui.pulsable(heli ? Color.parseColor("#FFF4E5") : Color.WHITE, 14, this));
+            t.setElevation(dp(1));
 
             String url = e.optString("url_fr24");
             if (!url.isEmpty()) {

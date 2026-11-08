@@ -1,0 +1,404 @@
+package es.avisosaviones;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.Color;
+import android.os.Bundle;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.widget.AutoCompleteTextView;
+import android.widget.BaseAdapter;
+import android.widget.EditText;
+import android.widget.Filter;
+import android.widget.Filterable;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.Switch;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+/** Crear o editar una alerta. */
+public class AlertaActivity extends Activity {
+
+    static final String EXTRA_ID = "id";
+
+    private static final float[] DISTANCIAS = {0.5f, 1, 2, 3, 5, 7, 10, 15, 20, 30, 40, 50, 75, 100, 150, 200, 250};
+    private static final float[] MINIMOS = {0.5f, 1, 2, 3, 5, 10, 20, 50};
+    private static final int[] ALTITUDES = {0, 300, 500, 1000, 1500, 2000, 3000, 5000, 8000};
+    private static final String[] TIPOS = {Alerta.TODO, Alerta.AVIONES, Alerta.HELICOPTEROS, Alerta.MILITARES, Alerta.EMERGENCIAS};
+    private static final String[] TIPOS_TXT = {"✈️🚁 Todo", "✈️ Aviones", "🚁 Helicópteros", "🎖️ Militares", "🚨 Emergencias"};
+
+    private Alerta alerta;
+    private boolean nueva;
+
+    private EditText nombre, matriculas, indicativos;
+    private TextView txtDistancia, txtMinimo, txtAltitud, txtTipoAyuda;
+    private SeekBar barraDistancia, barraMinimo, barraAltitud;
+    private Switch swMinimo;
+    private final List<TextView> chipsTipo = new ArrayList<>();
+    private ViewGroup chipsOrigen, chipsDestino;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().setStatusBarColor(Ui.AZUL_OSCURO);
+        String id = getIntent().getStringExtra(EXTRA_ID);
+        alerta = id != null ? Alertas.buscar(this, id) : null;
+        nueva = alerta == null;
+        if (nueva) alerta = new Alerta();
+        construir();
+    }
+
+    private int dp(float v) { return Ui.dp(this, v); }
+
+    private void construir() {
+        LinearLayout raiz = new LinearLayout(this);
+        raiz.setOrientation(LinearLayout.VERTICAL);
+        raiz.setBackgroundColor(Ui.FONDO);
+
+        // ---------- Barra superior
+        LinearLayout barra = new LinearLayout(this);
+        barra.setGravity(Gravity.CENTER_VERTICAL);
+        barra.setBackgroundColor(Ui.AZUL_OSCURO);
+        barra.setPadding(dp(8), dp(12), dp(16), dp(12));
+        TextView atras = Ui.texto(this, "←", 24, Color.WHITE, true);
+        atras.setPadding(dp(12), 0, dp(12), 0);
+        atras.setOnClickListener(v -> finish());
+        barra.addView(atras);
+        barra.addView(Ui.texto(this, nueva ? "Nueva alerta" : "Editar alerta", 20, Color.WHITE, true));
+        raiz.addView(barra);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(14), dp(6), dp(14), dp(24));
+
+        // ---------- Nombre
+        LinearLayout tNombre = Ui.tarjeta(this, "Nombre", null);
+        nombre = new EditText(this);
+        nombre.setText(alerta.nombre);
+        nombre.setSingleLine(true);
+        nombre.setSelectAllOnFocus(nueva);
+        nombre.setTextSize(17);
+        tNombre.addView(nombre);
+        col.addView(tNombre, Ui.ancho(12, this));
+
+        // ---------- Tipo
+        LinearLayout tTipo = Ui.tarjeta(this, "¿De qué quieres que te avise?", null);
+        ViewGroup filaTipo = Ui.filaChips(this);
+        for (int i = 0; i < TIPOS.length; i++) {
+            final String t = TIPOS[i];
+            TextView ch = Ui.chip(this, TIPOS_TXT[i]);
+            ch.setOnClickListener(v -> { alerta.tipo = t; refrescarTipo(); });
+            chipsTipo.add(ch);
+            filaTipo.addView(ch);
+        }
+        tTipo.addView(filaTipo, Ui.ancho(8, this));
+        txtTipoAyuda = Ui.texto(this, "", 13, Ui.TEXTO_SUAVE, false);
+        tTipo.addView(txtTipoAyuda, Ui.ancho(8, this));
+        col.addView(tTipo, Ui.ancho(12, this));
+
+        // ---------- Distancia
+        LinearLayout tDist = Ui.tarjeta(this, "📍 ¿A qué distancia de ti?", null);
+        txtDistancia = Ui.texto(this, "", 26, Ui.AZUL, true);
+        tDist.addView(txtDistancia, Ui.ancho(4, this));
+        barraDistancia = barra(DISTANCIAS.length - 1, indiceCercano(DISTANCIAS, alerta.radioKm), () -> {
+            alerta.radioKm = DISTANCIAS[barraDistancia.getProgress()];
+            refrescarDistancias();
+        });
+        tDist.addView(barraDistancia, Ui.ancho(4, this));
+
+        swMinimo = new Switch(this);
+        swMinimo.setText("Ignorar lo que pase muy cerca");
+        swMinimo.setTextSize(15);
+        swMinimo.setTextColor(Ui.TEXTO);
+        swMinimo.setChecked(alerta.distMinKm > 0);
+        tDist.addView(swMinimo, Ui.ancho(14, this));
+        txtMinimo = Ui.texto(this, "", 14, Ui.TEXTO_SUAVE, false);
+        tDist.addView(txtMinimo, Ui.ancho(4, this));
+        barraMinimo = barra(MINIMOS.length - 1, indiceCercano(MINIMOS, alerta.distMinKm > 0 ? alerta.distMinKm : 1), () -> {
+            if (swMinimo.isChecked()) alerta.distMinKm = MINIMOS[barraMinimo.getProgress()];
+            refrescarDistancias();
+        });
+        tDist.addView(barraMinimo);
+        swMinimo.setOnCheckedChangeListener((b, on) -> {
+            alerta.distMinKm = on ? MINIMOS[barraMinimo.getProgress()] : 0;
+            refrescarDistancias();
+        });
+        col.addView(tDist, Ui.ancho(12, this));
+
+        // ---------- Ruta
+        LinearLayout tRuta = Ui.tarjeta(this, "🛫 Ruta",
+                "Opcional. Escribe una ciudad, un aeropuerto o su código y elígelo de la lista.");
+        tRuta.addView(Ui.texto(this, "Sale de", 14, Ui.TEXTO, true), Ui.ancho(10, this));
+        chipsOrigen = Ui.filaChips(this);
+        tRuta.addView(chipsOrigen, Ui.ancho(6, this));
+        tRuta.addView(buscadorAeropuerto("Ej: Madrid, Barajas, MAD…", alerta.origenes, chipsOrigen));
+        tRuta.addView(Ui.texto(this, "Va a", 14, Ui.TEXTO, true), Ui.ancho(14, this));
+        chipsDestino = Ui.filaChips(this);
+        tRuta.addView(chipsDestino, Ui.ancho(6, this));
+        tRuta.addView(buscadorAeropuerto("Ej: Londres, Heathrow, LHR…", alerta.destinos, chipsDestino));
+        if (Aeropuertos.todos(this).isEmpty()) {
+            tRuta.addView(Ui.texto(this, "⚠️ No se ha cargado la lista de aeropuertos; escribe el código IATA y pulsa Intro.",
+                    13, Ui.ROJO, false), Ui.ancho(8, this));
+        }
+        col.addView(tRuta, Ui.ancho(12, this));
+
+        // ---------- Más filtros (plegable)
+        LinearLayout tMas = Ui.tarjeta(this, null, null);
+        TextView cabMas = Ui.texto(this, "🔎 Más filtros  ▾", 17, Ui.TEXTO, true);
+        tMas.addView(cabMas);
+        LinearLayout cuerpoMas = new LinearLayout(this);
+        cuerpoMas.setOrientation(LinearLayout.VERTICAL);
+        tMas.addView(cuerpoMas);
+
+        txtAltitud = Ui.texto(this, "", 15, Ui.TEXTO, false);
+        cuerpoMas.addView(txtAltitud, Ui.ancho(12, this));
+        barraAltitud = barra(ALTITUDES.length - 1, indiceCercanoInt(ALTITUDES, alerta.altMaxM), () -> {
+            alerta.altMaxM = ALTITUDES[barraAltitud.getProgress()];
+            refrescarAltitud();
+        });
+        cuerpoMas.addView(barraAltitud);
+
+        cuerpoMas.addView(Ui.texto(this, "Matrícula", 15, Ui.TEXTO, false), Ui.ancho(14, this));
+        matriculas = campo("Ej: EC-MXV   ·   EC-* (todas las españolas)", alerta.matriculas);
+        cuerpoMas.addView(matriculas);
+        cuerpoMas.addView(Ui.texto(this, "Aerolínea o indicativo", 15, Ui.TEXTO, false), Ui.ancho(14, this));
+        indicativos = campo("Ej: IBE* (Iberia)  ·  !RYR* (todo menos Ryanair)", alerta.indicativos);
+        cuerpoMas.addView(indicativos);
+        cuerpoMas.addView(Ui.texto(this,
+                "Puedes poner varios separados por comas. El * vale por cualquier cosa y el ! delante excluye.",
+                12, Ui.TEXTO_SUAVE, false), Ui.ancho(6, this));
+
+        boolean hayMas = alerta.altMaxM > 0 || !alerta.matriculas.isEmpty() || !alerta.indicativos.isEmpty();
+        cuerpoMas.setVisibility(hayMas ? View.VISIBLE : View.GONE);
+        cabMas.setText(hayMas ? "🔎 Más filtros  ▴" : "🔎 Más filtros  ▾");
+        cabMas.setOnClickListener(v -> {
+            boolean abrir = cuerpoMas.getVisibility() != View.VISIBLE;
+            cuerpoMas.setVisibility(abrir ? View.VISIBLE : View.GONE);
+            cabMas.setText(abrir ? "🔎 Más filtros  ▴" : "🔎 Más filtros  ▾");
+        });
+        col.addView(tMas, Ui.ancho(12, this));
+
+        // ---------- Botones
+        TextView guardar = Ui.botonPrincipal(this, "Guardar alerta", Ui.AZUL);
+        guardar.setOnClickListener(v -> guardar());
+        col.addView(guardar, Ui.ancho(20, this));
+        if (!nueva) {
+            TextView borrar = Ui.texto(this, "Eliminar alerta", 15, Ui.ROJO, true);
+            borrar.setGravity(Gravity.CENTER);
+            borrar.setPadding(0, dp(16), 0, dp(8));
+            borrar.setOnClickListener(v -> new AlertDialog.Builder(this)
+                    .setMessage("¿Eliminar «" + alerta.nombre + "»?")
+                    .setPositiveButton("Eliminar", (d, w) -> { Alertas.borrar(this, alerta.id); finish(); })
+                    .setNegativeButton("Cancelar", null)
+                    .show());
+            col.addView(borrar);
+        }
+
+        ScrollView sv = new ScrollView(this);
+        sv.addView(col);
+        raiz.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        setContentView(raiz);
+
+        refrescarTipo();
+        refrescarDistancias();
+        refrescarAltitud();
+        pintarChipsAeropuertos(alerta.origenes, chipsOrigen);
+        pintarChipsAeropuertos(alerta.destinos, chipsDestino);
+    }
+
+    // ------------------------------------------------------------ piezas
+
+    private SeekBar barra(int max, int valor, Runnable alCambiar) {
+        SeekBar s = new SeekBar(this);
+        s.setMax(max);
+        s.setProgress(valor);
+        s.setPadding(dp(8), dp(10), dp(8), dp(10));
+        s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar sb, int p, boolean user) { alCambiar.run(); }
+            @Override public void onStartTrackingTouch(SeekBar sb) {}
+            @Override public void onStopTrackingTouch(SeekBar sb) {}
+        });
+        return s;
+    }
+
+    private EditText campo(String pista, String valor) {
+        EditText e = new EditText(this);
+        e.setHint(pista);
+        e.setText(valor);
+        e.setSingleLine(true);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        return e;
+    }
+
+    private static int indiceCercano(float[] valores, float v) {
+        int mejor = 0;
+        for (int i = 0; i < valores.length; i++) if (Math.abs(valores[i] - v) < Math.abs(valores[mejor] - v)) mejor = i;
+        return mejor;
+    }
+
+    private static int indiceCercanoInt(int[] valores, int v) {
+        int mejor = 0;
+        for (int i = 0; i < valores.length; i++) if (Math.abs(valores[i] - v) < Math.abs(valores[mejor] - v)) mejor = i;
+        return mejor;
+    }
+
+    private void refrescarTipo() {
+        for (int i = 0; i < TIPOS.length; i++) Ui.marcarChip(this, chipsTipo.get(i), TIPOS[i].equals(alerta.tipo));
+        String ayuda;
+        switch (alerta.tipo) {
+            case Alerta.AVIONES: ayuda = "Solo aviones; no avisa de helicópteros."; break;
+            case Alerta.HELICOPTEROS: ayuda = "Solo helicópteros que emitan su posición (muchos militares o policiales no lo hacen)."; break;
+            case Alerta.MILITARES: ayuda = "Aeronaves marcadas como militares en la base de datos."; break;
+            case Alerta.EMERGENCIAS: ayuda = "Aeronaves que declaran emergencia (squawk 7700), fallo de radio (7600) o secuestro (7500)."; break;
+            default: ayuda = "Cualquier avión o helicóptero.";
+        }
+        txtTipoAyuda.setText(ayuda);
+    }
+
+    private void refrescarDistancias() {
+        txtDistancia.setText("Hasta " + Alerta.km(alerta.radioKm));
+        barraMinimo.setVisibility(swMinimo.isChecked() ? View.VISIBLE : View.GONE);
+        txtMinimo.setVisibility(swMinimo.isChecked() ? View.VISIBLE : View.GONE);
+        if (swMinimo.isChecked()) {
+            String t = "No avisar si está a menos de " + Alerta.km(alerta.distMinKm);
+            if (alerta.distMinKm >= alerta.radioKm) t += "  ⚠️ es mayor que la distancia máxima";
+            txtMinimo.setText(t);
+        }
+    }
+
+    private void refrescarAltitud() {
+        txtAltitud.setText(alerta.altMaxM == 0 ? "Altitud: cualquiera"
+                : String.format(Locale.getDefault(), "Altitud: por debajo de %,d m", alerta.altMaxM));
+    }
+
+    // ------------------------------------------------------------ aeropuertos
+
+    private AutoCompleteTextView buscadorAeropuerto(String pista, List<String> destino, ViewGroup chips) {
+        AutoCompleteTextView ac = new AutoCompleteTextView(this);
+        ac.setHint("🔍  " + pista);
+        ac.setSingleLine(true);
+        ac.setThreshold(1);
+        ac.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        ac.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        AdaptadorAeropuertos ad = new AdaptadorAeropuertos(this);
+        ac.setAdapter(ad);
+        ac.setOnItemClickListener((p, v, pos, id) -> {
+            Aeropuertos.Aeropuerto a = ad.getItem(pos);
+            if (!destino.contains(a.iata)) destino.add(a.iata);
+            ac.setText("");
+            pintarChipsAeropuertos(destino, chips);
+        });
+        // Intro con un código de 3 letras lo añade directamente
+        ac.setOnEditorActionListener((v, accion, ev) -> {
+            String t = ac.getText().toString().trim().toUpperCase(Locale.ROOT);
+            if (t.matches("[A-Z0-9]{3}")) {
+                if (!destino.contains(t)) destino.add(t);
+                ac.setText("");
+                pintarChipsAeropuertos(destino, chips);
+                return true;
+            }
+            return false;
+        });
+        return ac;
+    }
+
+    private void pintarChipsAeropuertos(List<String> codigos, ViewGroup chips) {
+        chips.removeAllViews();
+        if (codigos.isEmpty()) {
+            chips.addView(Ui.texto(this, "Cualquier aeropuerto", 14, Ui.TEXTO_SUAVE, false));
+            return;
+        }
+        for (String codigo : new ArrayList<>(codigos)) {
+            TextView ch = Ui.chip(this, Aeropuertos.etiqueta(this, codigo) + "   ✕");
+            Ui.marcarChip(this, ch, true);
+            ch.setOnClickListener(v -> { codigos.remove(codigo); pintarChipsAeropuertos(codigos, chips); });
+            chips.addView(ch);
+        }
+    }
+
+    /** Sugerencias de aeropuertos mientras se escribe. */
+    private static final class AdaptadorAeropuertos extends BaseAdapter implements Filterable {
+        private final Context c;
+        private List<Aeropuertos.Aeropuerto> datos = new ArrayList<>();
+
+        AdaptadorAeropuertos(Context c) { this.c = c; }
+
+        @Override public int getCount() { return datos.size(); }
+        @Override public Aeropuertos.Aeropuerto getItem(int i) { return datos.get(i); }
+        @Override public long getItemId(int i) { return i; }
+
+        @Override public View getView(int i, View reciclada, ViewGroup padre) {
+            LinearLayout fila;
+            TextView t1, t2;
+            if (reciclada instanceof LinearLayout) {
+                fila = (LinearLayout) reciclada;
+                t1 = (TextView) fila.getChildAt(0);
+                t2 = (TextView) fila.getChildAt(1);
+            } else {
+                fila = new LinearLayout(c);
+                fila.setOrientation(LinearLayout.VERTICAL);
+                fila.setPadding(Ui.dp(c, 16), Ui.dp(c, 10), Ui.dp(c, 16), Ui.dp(c, 10));
+                t1 = Ui.texto(c, "", 16, Ui.TEXTO, true);
+                t2 = Ui.texto(c, "", 13, Ui.TEXTO_SUAVE, false);
+                fila.addView(t1);
+                fila.addView(t2);
+            }
+            Aeropuertos.Aeropuerto a = datos.get(i);
+            t1.setText(a.titulo());
+            t2.setText(a.detalle());
+            return fila;
+        }
+
+        @Override public Filter getFilter() {
+            return new Filter() {
+                @Override protected FilterResults performFiltering(CharSequence q) {
+                    FilterResults r = new FilterResults();
+                    List<Aeropuertos.Aeropuerto> l = q == null ? new ArrayList<>() : Aeropuertos.buscar(c, q.toString(), 25);
+                    r.values = l;
+                    r.count = l.size();
+                    return r;
+                }
+                @SuppressWarnings("unchecked")
+                @Override protected void publishResults(CharSequence q, FilterResults r) {
+                    datos = r.values != null ? (List<Aeropuertos.Aeropuerto>) r.values : new ArrayList<>();
+                    notifyDataSetChanged();
+                }
+                @Override public CharSequence convertResultToString(Object o) {
+                    return o instanceof Aeropuertos.Aeropuerto ? ((Aeropuertos.Aeropuerto) o).titulo() : "";
+                }
+            };
+        }
+    }
+
+    // ------------------------------------------------------------ guardar
+
+    private void guardar() {
+        String n = nombre.getText().toString().trim();
+        if (n.isEmpty()) {
+            Toast.makeText(this, "Ponle un nombre a la alerta", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (alerta.distMinKm >= alerta.radioKm) {
+            Toast.makeText(this, "La distancia mínima tiene que ser menor que la máxima", Toast.LENGTH_LONG).show();
+            return;
+        }
+        alerta.nombre = n;
+        alerta.matriculas = matriculas.getText().toString().trim();
+        alerta.indicativos = indicativos.getText().toString().trim();
+        Alertas.guardarUna(this, alerta);
+        Toast.makeText(this, "Alerta guardada", Toast.LENGTH_SHORT).show();
+        setResult(RESULT_OK, new Intent());
+        finish();
+    }
+}

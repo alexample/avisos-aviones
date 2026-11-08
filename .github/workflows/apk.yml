@@ -23,6 +23,30 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Lista de aeropuertos (OurAirports)
+        run: |
+          mkdir -p app/src/main/assets
+          curl -sSfL -m 120 https://davidmegginson.github.io/ourairports-data/airports.csv -o /tmp/airports.csv || true
+          python3 - <<'EOF'
+          import csv, os
+          out = []
+          if os.path.exists('/tmp/airports.csv'):
+              with open('/tmp/airports.csv', encoding='utf-8') as f:
+                  for r in csv.DictReader(f):
+                      iata = (r.get('iata_code') or '').strip().upper()
+                      if len(iata) != 3 or not iata.isalnum():
+                          continue
+                      tipo = r.get('type', '')
+                      if tipo not in ('large_airport', 'medium_airport') and r.get('scheduled_service') != 'yes':
+                          continue
+                      limpia = lambda s: (s or '').replace('|', ' ').strip()
+                      out.append('|'.join([iata, limpia(r.get('icao_code') or r.get('gps_code')),
+                                           limpia(r.get('municipality')), limpia(r.get('name')),
+                                           limpia(r.get('iso_country')), 'L' if tipo == 'large_airport' else 'M']))
+          open('app/src/main/assets/aeropuertos.txt', 'w', encoding='utf-8').write('\n'.join(out))
+          print(len(out), 'aeropuertos')
+          EOF
+
       - name: Compilar
         run: gradle --no-daemon assembleRelease
 
