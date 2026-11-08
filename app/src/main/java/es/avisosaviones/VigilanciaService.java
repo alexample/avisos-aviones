@@ -64,6 +64,7 @@ public class VigilanciaService extends Service {
     private PowerManager.WakeLock wakeLock;
     private volatile Location ultimaUbicacion;
     private final Map<String, Long> avisados = new HashMap<>();
+    private long ultimoAviso = 0;
     private int idAviso = 100;
 
     private final LocationListener oyente = new LocationListener() {
@@ -218,10 +219,12 @@ public class VigilanciaService extends Service {
         List<JSONObject> aparatos = new ArrayList<>(porHex.values());
 
         Map<String, String[]> fr24 = null; // se descarga solo si hace falta, una vez por vuelta
-        int cerca = 0, coinciden = 0;
+        int cerca = 0, coinciden = 0, enviados = 0;
+        String errorAparato = null;
         double masCerca = Double.MAX_VALUE;
         long ahora = System.currentTimeMillis();
         for (JSONObject a : aparatos) {
+          try {
             if (!a.has("lat") || !a.has("lon")) continue;
             if ("ground".equals(a.optString("alt_baro"))) continue;
 
@@ -284,7 +287,13 @@ public class VigilanciaService extends Service {
             avisar(a, av.heli, av.distKm, av.altM, av.distKm < 3, datosFr24,
                     (av.servicio.isEmpty() ? "" : Servicios.legible(av.servicio) + " · ") + "🔔 " + cumplida.nombre,
                     Sonidos.canal(this, cumplida));
-            if (coinciden > 15) break; // por si una alerta muy amplia dispara muchos a la vez
+            ultimoAviso = System.currentTimeMillis();
+            // Tope de avisos NUEVOS por vuelta (los ya avisados no cuentan); el resto sale en la siguiente
+            if (++enviados >= 10) break;
+          } catch (Exception ex) {
+            // Un aparato con datos raros no debe impedir revisar los demás
+            errorAparato = ex.getClass().getSimpleName() + ": " + ex.getMessage();
+          }
         }
 
         // Limpieza de la memoria de avisos
@@ -295,11 +304,14 @@ public class VigilanciaService extends Service {
         String titulo = cerca == 0 ? "Vigilando · cielo despejado"
                 : String.format(Locale.getDefault(), "Vigilando · %d %s (la más cercana a %s)",
                     cerca, cerca == 1 ? "aeronave" : "aeronaves", Alerta.km((float) masCerca));
+        String extra = (ultimoAviso > 0
+                ? " · último aviso " + new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(ultimoAviso)) : "")
+                + (errorAparato != null ? "\n⚠️ " + errorAparato : "");
         String txt = String.format(Locale.getDefault(),
                 "%s\n%d cumplen tus alertas%s · comprobado a las %s · GPS ±%.0f m%s",
                 titulo, coinciden, globales.isEmpty() ? "" : " · " + lejos.length() + " en búsquedas sin límite",
                 hora, yo.getAccuracy(),
-                estadoFr24.isEmpty() ? "" : " · " + estadoFr24);
+                estadoFr24.isEmpty() ? "" : " · " + estadoFr24) + extra;
         publicarEstado(txt);
         actualizarNotificacionServicio(String.format(Locale.getDefault(),
                 "Vigilando · %d cerca · %s", cerca, hora));
