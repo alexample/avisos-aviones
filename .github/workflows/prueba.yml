@@ -8,7 +8,7 @@ jobs:
     steps:
       - run: |
           for p in "40.4/-3.7/250" "41.4/2.1/200" "37.4/-5.9/200" "43.3/-3.8/200" "39.5/-0.4/150" "28.3/-15.6/200" "42.8/-1.6/150"; do
-            curl -sS -m 30 "https://api.airplanes.live/v2/point/$p" -o "p_$(echo $p|tr / _).json"; sleep 1.2
+            curl -sS -m 30 "https://api.adsb.lol/v2/point/$p" -o "p_$(echo $p|tr / _).json" -w "%{http_code} "; head -c 150 "p_$(echo $p|tr / _).json"; echo; sleep 1.2
           done
           python3 - <<'PY'
           import json, glob, collections
