@@ -290,8 +290,28 @@ public class VigilanciaService extends Service {
         cuerpo.append(String.format(Locale.getDefault(), "A %.1f km", distKm));
         if (altM >= 0) cuerpo.append(String.format(Locale.getDefault(), " · %,d m de altitud", altM));
 
-        Intent ver = new Intent(Intent.ACTION_VIEW, Uri.parse("https://globe.airplanes.live/?icao=" + hex));
-        PendingIntent pi = PendingIntent.getActivity(this, idAviso, ver,
+        // Flightradar24: por indicativo si lo hay, si no por matrícula. Si tienes la app
+        // de FR24 instalada, Android abre el enlace directamente en ella.
+        String urlFr24;
+        String indicativoLimpio = indicativo.replaceAll("[^A-Za-z0-9]", "");
+        String matriculaLimpia = matricula.replaceAll("[^A-Za-z0-9-]", "");
+        if (!indicativoLimpio.isEmpty()) {
+            urlFr24 = "https://www.flightradar24.com/" + indicativoLimpio.toUpperCase(Locale.ROOT);
+        } else if (!matriculaLimpia.isEmpty()) {
+            urlFr24 = "https://www.flightradar24.com/data/aircraft/" + matriculaLimpia.toLowerCase(Locale.ROOT);
+        } else {
+            urlFr24 = String.format(Locale.US, "https://www.flightradar24.com/%.4f,%.4f/13",
+                    a.optDouble("lat"), a.optDouble("lon"));
+        }
+
+        Intent verFr24 = new Intent(Intent.ACTION_VIEW, Uri.parse(urlFr24))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent piFr24 = PendingIntent.getActivity(this, idAviso * 2, verFr24,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Intent verAl = new Intent(Intent.ACTION_VIEW, Uri.parse("https://globe.airplanes.live/?icao=" + hex))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent piAl = PendingIntent.getActivity(this, idAviso * 2 + 1, verAl,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         Notification n = new Notification.Builder(this, CANAL_AVISOS)
@@ -299,7 +319,9 @@ public class VigilanciaService extends Service {
                 .setContentTitle(titulo)
                 .setContentText(cuerpo.toString().replace("\n", " · "))
                 .setStyle(new Notification.BigTextStyle().bigText(cuerpo.toString()))
-                .setContentIntent(pi)
+                .setContentIntent(piFr24)
+                .addAction(new Notification.Action.Builder(null, "Flightradar24", piFr24).build())
+                .addAction(new Notification.Action.Builder(null, "airplanes.live", piAl).build())
                 .setAutoCancel(true)
                 .build();
 

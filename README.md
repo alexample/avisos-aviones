@@ -14,7 +14,7 @@ Al instalar, Android te pedirá permitir "instalar apps de origen desconocido".
 3. Pulsa **Quitar ahorro de batería** para que Android no la duerma.
 
 Mientras vigila verás una notificación fija con botón **Parar**. Cada aviso muestra
-indicativo, tipo, matrícula, distancia y altitud; al tocarlo se abre en el mapa de airplanes.live.
+indicativo, tipo, matrícula, distancia y altitud; al tocarlo se abre en Flightradar24 (app o web), y tiene un botón para verlo en airplanes.live.
 
 ## Cómo funciona
 
