@@ -81,6 +81,7 @@ public class VigilanciaService extends Service {
 
     private final Runnable comprobar = new Runnable() {
         @Override public void run() {
+            Ajustes.prefs(VigilanciaService.this).edit().putLong(Vigilante.LATIDO, System.currentTimeMillis()).apply();
             try {
                 comprobarCielo();
             } catch (Throwable t) {
@@ -106,6 +107,7 @@ public class VigilanciaService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACCION_PARAR.equals(intent.getAction())) {
             Ajustes.prefs(this).edit().putBoolean(Ajustes.ACTIVO, false).apply();
+            Vigilante.cancelar(this);
             publicarEstado("Parado.");
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
@@ -120,21 +122,49 @@ public class VigilanciaService extends Service {
                 startForeground(ID_SERVICIO, n);
             }
         } catch (Exception e) {
-            // Android puede negarse a reanudarlo en segundo plano: el usuario lo reabrirá desde la app.
-            Ajustes.prefs(this).edit().putBoolean(Ajustes.ACTIVO, false).apply();
+            // Android no deja reanudarla en segundo plano: avisar para que el usuario toque y la reanude.
+            // (Se queda "activa" para que el vigilante lo siga intentando.)
+            Vigilante.apuntarMotivo(this, "Android no dejó reanudarla (" + e.getClass().getSimpleName() + ")");
+            Vigilante.avisarParada(this);
+            Vigilante.programar(this, 15 * 60 * 1000L);
             stopSelf();
             return START_NOT_STICKY;
         }
+
+        // Si el hilo de trabajo se ha quedado colgado (sin latidos), se cambia por uno nuevo
+        if (!Vigilante.vivo(this)) reiniciarHilo();
 
         if (!wakeLock.isHeld()) wakeLock.acquire();
         empezarUbicacion();
         handler.removeCallbacks(comprobar);
         handler.post(comprobar);
+        Vigilante.programar(this, 15 * 60 * 1000L);
         return START_STICKY;
+    }
+
+    private void reiniciarHilo() {
+        handler.removeCallbacksAndMessages(null);
+        try { lm.removeUpdates(oyente); } catch (Exception ignored) {}
+        hilo.quit();
+        hilo = new HandlerThread("vigilancia");
+        hilo.start();
+        handler = new Handler(hilo.getLooper());
+    }
+
+    /** El usuario quita la app de recientes: algunos fabricantes matan el servicio, así que se programa volver. */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        if (Ajustes.activo(this)) Vigilante.programar(this, 5_000L);
     }
 
     @Override
     public void onDestroy() {
+        if (Ajustes.activo(this)) {
+            // No lo ha parado el usuario: lo ha cerrado Android
+            Vigilante.apuntarMotivo(this, "Android cerró el servicio");
+            Vigilante.programar(this, 10_000L);
+        }
         handler.removeCallbacksAndMessages(null);
         try { lm.removeUpdates(oyente); } catch (Exception ignored) {}
         if (wakeLock.isHeld()) wakeLock.release();

@@ -31,9 +31,12 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private static final int REQ_PERMISOS = 1;
+    private static final int REQ_SEGUNDO_PLANO = 2;
 
     private TextView boton, estadoTitulo, estadoDetalle, punto;
     private LinearLayout listaAlertas;
+    private TextView diagnostico;
+    private boolean ubicacionPreguntada = false; // para no insistir en bucle si dice que no
 
     private final BroadcastReceiver receptorEstado = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -58,6 +61,63 @@ public class MainActivity extends Activity {
         else registerReceiver(receptorEstado, f);
         refrescarBoton();
         pintarAlertas();
+        // Si debería estar vigilando pero Android la ha cerrado, se reanuda (desde aquí sí está permitido)
+        if (Ajustes.activo(this) && !Vigilante.vivo(this)) Vigilante.revisar(this, "app");
+        pintarDiagnostico();
+    }
+
+    private void pintarDiagnostico() {
+        StringBuilder sb = new StringBuilder();
+        String motivo = Ajustes.prefs(this).getString(Vigilante.MOTIVO_PARADA, "");
+        if (!motivo.isEmpty()) sb.append("Última parada: ").append(motivo);
+        String cierre = Vigilante.ultimoCierre(this);
+        if (!cierre.isEmpty()) sb.append(sb.length() > 0 ? "\n" : "").append("Último cierre de Android: ").append(cierre);
+        List<String> falta = faltaParaSegundoPlano();
+        if (!falta.isEmpty()) sb.append(sb.length() > 0 ? "\n" : "").append("⚠️ Para que no se pare: ").append(String.join(" y ", falta))
+                .append(". Toca aquí.");
+        diagnostico.setText(sb.toString());
+        diagnostico.setVisibility(sb.length() > 0 ? android.view.View.VISIBLE : android.view.View.GONE);
+    }
+
+    /** Lo que falta para que Android deje la vigilancia en paz. */
+    private List<String> faltaParaSegundoPlano() {
+        List<String> l = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 29 && checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) l.add("ubicación «Permitir todo el tiempo»");
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        if (!pm.isIgnoringBatteryOptimizations(getPackageName())) l.add("batería «Sin restricciones»");
+        return l;
+    }
+
+    /** Explica y pide, uno a uno, los permisos que evitan que Android cierre la vigilancia. */
+    private void pedirSegundoPlano() {
+        if (!ubicacionPreguntada && Build.VERSION.SDK_INT >= 29 && checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Ubicación: «Permitir todo el tiempo»")
+                    .setMessage("Si Android cierra la vigilancia (por ejemplo, tras unas horas), solo puede volver a arrancarla "
+                            + "sola si la app tiene la ubicación permitida todo el tiempo.\n\nEn la pantalla siguiente elige "
+                            + "«Permitir todo el tiempo». La ubicación solo se usa en el móvil para saber qué tienes cerca.")
+                    .setPositiveButton("Continuar", (d, w) -> {
+                        ubicacionPreguntada = true;
+                        requestPermissions(new String[]{Manifest.permission.ACCESS_BACKGROUND_LOCATION}, REQ_SEGUNDO_PLANO);
+                    })
+                    .setNegativeButton("Ahora no", (d, w) -> { ubicacionPreguntada = true; pedirSegundoPlano(); })
+                    .show();
+            return;
+        }
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        if (!pm.isIgnoringBatteryOptimizations(getPackageName())) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Batería: «Sin restricciones»")
+                    .setMessage("El ahorro de batería es lo que suele cerrar la app tras unas horas. "
+                            + "Acepta en la pantalla siguiente para que Android no la duerma.\n\n"
+                            + "En Samsung, además: Ajustes → Batería → Límites de uso en segundo plano → "
+                            + "quita Avisos Aviones de «Aplicaciones en suspensión» y «en suspensión profunda».")
+                    .setPositiveButton("Continuar", (d, w) -> pedirSinOptimizacionBateria())
+                    .setNegativeButton("Ahora no", null)
+                    .show();
+        }
     }
 
     @Override
@@ -142,6 +202,12 @@ public class MainActivity extends Activity {
         TextView historial = Ui.botonSecundario(this, "📋  Historial de pasos");
         historial.setOnClickListener(v -> startActivity(new Intent(this, HistorialActivity.class)));
         col.addView(historial, Ui.ancho(18, this));
+
+        diagnostico = Ui.texto(this, "", 12, Color.parseColor("#9A3412"), false);
+        diagnostico.setPadding(dp(14), dp(12), dp(14), dp(12));
+        diagnostico.setBackground(Ui.redondeado(Color.parseColor("#FFF7ED"), 14, this));
+        diagnostico.setOnClickListener(v -> { ubicacionPreguntada = false; pedirSegundoPlano(); });
+        col.addView(diagnostico, Ui.ancho(14, this));
 
         TextView nota = Ui.texto(this, "Datos: airplanes.live y adsb.lol · rutas de Flightradar24 y adsbdb. "
                 + "Los aparatos que no emiten ADS-B (muchos helicópteros militares o policiales) no aparecen.",
@@ -277,10 +343,12 @@ public class MainActivity extends Activity {
     }
 
     private void arrancar() {
+        Ajustes.prefs(this).edit().putBoolean(Ajustes.ACTIVO, true).remove(Vigilante.MOTIVO_PARADA).apply();
         startForegroundService(new Intent(this, VigilanciaService.class));
-        Ajustes.prefs(this).edit().putBoolean(Ajustes.ACTIVO, true).apply();
         refrescarBoton();
         mostrarEstado(null);
+        pintarDiagnostico();
+        if (!faltaParaSegundoPlano().isEmpty()) diagnostico.postDelayed(this::pedirSegundoPlano, 800);
     }
 
     /** @return true si ha tenido que pedir permisos. */
@@ -302,6 +370,11 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_SEGUNDO_PLANO) {
+            pintarDiagnostico();
+            diagnostico.postDelayed(this::pedirSegundoPlano, 500); // siguiente: batería
+            return;
+        }
         if (requestCode != REQ_PERMISOS) return;
         boolean ubicacion = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
