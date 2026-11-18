@@ -53,10 +53,6 @@ public class VigilanciaService extends Service {
     /** No repetir aviso del mismo aparato durante este tiempo. */
     private static final long ENFRIAMIENTO_MS = 10 * 60 * 1000L;
 
-    private static final String[] FUENTES = {
-            "https://api.airplanes.live/v2/point/%f/%f/%d",
-            "https://api.adsb.lol/v2/point/%f/%f/%d",
-    };
 
     private HandlerThread hilo;
     private Handler handler;
@@ -82,12 +78,17 @@ public class VigilanciaService extends Service {
     private final Runnable comprobar = new Runnable() {
         @Override public void run() {
             Ajustes.prefs(VigilanciaService.this).edit().putLong(Vigilante.LATIDO, System.currentTimeMillis()).apply();
+            long espera = Ajustes.intervaloS(VigilanciaService.this) * 1000L;
             try {
                 comprobarCielo();
+            } catch (ServidoresOcupados o) {
+                espera = Math.max(espera, o.esperaMs + 1000);
+                publicarEstado("Servidores ocupados · reintento en " + Math.max(1, o.esperaMs / 1000) + " s"
+                        + "\nLos servidores gratuitos limitan las consultas; la app espera y sigue sola.");
             } catch (Throwable t) {
                 publicarEstado("Error: " + t.getMessage());
             }
-            handler.postDelayed(this, Ajustes.intervaloS(VigilanciaService.this) * 1000L);
+            handler.postDelayed(this, espera);
         }
     };
 
@@ -347,84 +348,117 @@ public class VigilanciaService extends Service {
                 "Vigilando · %d cerca · %s", cerca, hora));
     }
 
-    private JSONArray descargar(double lat, double lon, int radioNm) throws Exception {
+    private static final String[] BASES = {"https://api.airplanes.live/v2/", "https://api.adsb.lol/v2/"};
+
+    /** Los dos servidores nos están limitando (HTTP 429): hay que esperar. */
+    static final class ServidoresOcupados extends Exception {
+        final long esperaMs;
+        ServidoresOcupados(long esperaMs) {
+            super("servidores ocupados");
+            this.esperaMs = esperaMs;
+        }
+    }
+
+    // Pausa por servidor tras un 429 (respetando Retry-After, y si no, 30 s → 1 min → 2 min… hasta 10 min)
+    private final Map<String, Long> pausaHasta = new HashMap<>();
+    private final Map<String, Long> pausaMs = new HashMap<>();
+
+    /** Pide una ruta de la API (p. ej. "point/40.4/-3.7/5") al primer servidor que no esté en pausa. */
+    private JSONArray pedir(String ruta) throws Exception {
         Exception ultimoError = null;
-        for (String plantilla : FUENTES) {
+        long ahora = System.currentTimeMillis();
+        long menorEspera = Long.MAX_VALUE;
+        boolean todosEnPausa = true;
+        for (String base : BASES) {
+            Long hasta = pausaHasta.get(base);
+            if (hasta != null && ahora < hasta) {
+                menorEspera = Math.min(menorEspera, hasta - ahora);
+                continue;
+            }
+            todosEnPausa = false;
             try {
-                String url = String.format(Locale.US, plantilla, lat, lon, radioNm);
-                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                HttpURLConnection c = (HttpURLConnection) new URL(base + ruta).openConnection();
                 c.setConnectTimeout(10_000);
                 c.setReadTimeout(15_000);
                 c.setRequestProperty("User-Agent", "AvisosAviones/1.0 (Android)");
                 c.setRequestProperty("Accept", "application/json");
                 int code = c.getResponseCode();
+                if (code == 429 || code == 503) {
+                    long espera;
+                    long retry = -1;
+                    try { retry = Long.parseLong(String.valueOf(c.getHeaderField("Retry-After")).trim()); } catch (Exception ignored) {}
+                    if (retry > 0) espera = Math.min(600_000L, retry * 1000L);
+                    else {
+                        Long antes = pausaMs.get(base);
+                        espera = antes == null ? 30_000L : Math.min(600_000L, antes * 2);
+                    }
+                    pausaMs.put(base, espera);
+                    pausaHasta.put(base, ahora + espera);
+                    menorEspera = Math.min(menorEspera, espera);
+                    todosEnPausa = true;
+                    ultimoError = new Exception("HTTP " + code);
+                    continue;
+                }
                 if (code != 200) throw new Exception("HTTP " + code);
                 StringBuilder sb = new StringBuilder();
                 try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
                     String linea;
                     while ((linea = r.readLine()) != null) sb.append(linea);
                 }
+                pausaMs.remove(base);
                 JSONObject json = new JSONObject(sb.toString());
                 JSONArray ac = json.optJSONArray("ac");
                 if (ac == null) ac = json.optJSONArray("aircraft");
                 return ac != null ? ac : new JSONArray();
             } catch (Exception e) {
                 ultimoError = e;
+                todosEnPausa = false;
             }
         }
-        throw new Exception("sin conexión con los servidores de datos (" + ultimoError.getMessage() + ")");
+        if (menorEspera != Long.MAX_VALUE && (todosEnPausa || ultimoError == null)) throw new ServidoresOcupados(menorEspera);
+        throw new Exception("sin conexión con los servidores de datos ("
+                + (ultimoError != null ? ultimoError.getMessage() : "?") + ")");
+    }
+
+    private JSONArray descargar(double lat, double lon, int radioNm) throws Exception {
+        return pedir(String.format(Locale.US, "point/%.4f/%.4f/%d", lat, lon, radioNm));
     }
 
     // ---------------------------------------------------------------- búsquedas sin límite
 
-    private JSONArray cacheGlobal = new JSONArray();
-    private String clavesGlobal = "";
-    private long ultimaGlobal = 0;
+    private final Map<String, JSONArray> cacheRuta = new HashMap<>();
+    private final Map<String, Long> horaRuta = new HashMap<>();
 
-    /** Consulta (como mucho cada 30 s) los aparatos de las alertas "sin límite", en todo el mundo. */
+    /**
+     * Aparatos de las alertas "sin límite". Para no saturar la API se hace como mucho UNA consulta
+     * por vuelta (la más antigua) y cada una se repite como mucho cada 2 minutos; entre medias se usa lo guardado.
+     */
     private JSONArray consultasGlobales(java.util.Set<String> rutas) {
-        if (rutas.isEmpty()) { cacheGlobal = new JSONArray(); clavesGlobal = ""; return cacheGlobal; }
-        String claves = rutas.toString();
+        cacheRuta.keySet().retainAll(rutas);
+        horaRuta.keySet().retainAll(rutas);
         long ahora = System.currentTimeMillis();
-        long cada = Math.max(30_000L, Ajustes.intervaloS(this) * 1000L);
-        if (claves.equals(clavesGlobal) && ahora - ultimaGlobal < cada) return cacheGlobal;
-
-        JSONArray todo = new JSONArray();
-        boolean primera = true;
-        for (String ruta : rutas) {
-            if (!primera) { try { Thread.sleep(1100); } catch (InterruptedException ignored) {} } // límite de la API: 1/s
-            primera = false;
-            for (String base : new String[]{"https://api.airplanes.live/v2/", "https://api.adsb.lol/v2/"}) {
-                try {
-                    JSONArray ac = leerAparatos(base + ruta);
-                    for (int i = 0; i < ac.length(); i++) todo.put(ac.get(i));
-                    break;
-                } catch (Exception ignored) {}
+        String masAntigua = null;
+        long horaMasAntigua = Long.MAX_VALUE;
+        for (String r : rutas) {
+            long h = horaRuta.containsKey(r) ? horaRuta.get(r) : 0;
+            if (h < horaMasAntigua) { horaMasAntigua = h; masAntigua = r; }
+        }
+        if (masAntigua != null && ahora - horaMasAntigua >= 120_000L) {
+            try {
+                cacheRuta.put(masAntigua, pedir(masAntigua));
+                horaRuta.put(masAntigua, ahora);
+            } catch (Exception ignored) {
+                // En pausa o sin conexión: se reintenta en otra vuelta con lo que haya guardado
             }
         }
-        cacheGlobal = todo;
-        clavesGlobal = claves;
-        ultimaGlobal = ahora;
-        return todo;
-    }
-
-    private static JSONArray leerAparatos(String url) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(10_000);
-        c.setReadTimeout(15_000);
-        c.setRequestProperty("User-Agent", "AvisosAviones/1.0 (Android)");
-        c.setRequestProperty("Accept", "application/json");
-        int code = c.getResponseCode();
-        if (code != 200) throw new Exception("HTTP " + code);
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
-            String linea;
-            while ((linea = r.readLine()) != null) sb.append(linea);
+        JSONArray todo = new JSONArray();
+        for (JSONArray ac : cacheRuta.values()) {
+            for (int i = 0; i < ac.length(); i++) {
+                Object o = ac.opt(i);
+                if (o != null) todo.put(o);
+            }
         }
-        JSONObject json = new JSONObject(sb.toString());
-        JSONArray ac = json.optJSONArray("ac");
-        if (ac == null) ac = json.optJSONArray("aircraft");
-        return ac != null ? ac : new JSONArray();
+        return todo;
     }
 
     private static int altitudMetros(JSONObject a) {
