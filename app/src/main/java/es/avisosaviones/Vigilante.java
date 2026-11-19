@@ -57,7 +57,7 @@ public class Vigilante extends BroadcastReceiver {
     /** ¿Ha dado señales de vida la vigilancia hace poco? */
     static boolean vivo(Context c) {
         long latido = Ajustes.prefs(c).getLong(LATIDO, 0);
-        long margen = Math.max(180_000L, Ajustes.intervaloS(c) * 4000L);
+        long margen = Math.max(180_000L, Math.max(Ajustes.intervaloS(c), Ajustes.esperaMaxS(c)) * 2500L);
         return System.currentTimeMillis() - latido < margen;
     }
 

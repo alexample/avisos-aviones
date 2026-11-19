@@ -20,6 +20,7 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -77,10 +78,12 @@ public class VigilanciaService extends Service {
 
     private final Runnable comprobar = new Runnable() {
         @Override public void run() {
+            wakeLock.acquire(90_000L); // despierto solo mientras se comprueba
+            ultimaComprobacion = SystemClock.elapsedRealtime();
             Ajustes.prefs(VigilanciaService.this).edit().putLong(Vigilante.LATIDO, System.currentTimeMillis()).apply();
             long espera = Ajustes.intervaloS(VigilanciaService.this) * 1000L;
             try {
-                comprobarCielo();
+                espera = comprobarCielo();
             } catch (ServidoresOcupados o) {
                 espera = Math.max(espera, o.esperaMs + 1000);
                 publicarEstado("Servidores ocupados · reintento en " + Math.max(1, o.esperaMs / 1000) + " s"
@@ -88,9 +91,50 @@ public class VigilanciaService extends Service {
             } catch (Throwable t) {
                 publicarEstado("Error: " + t.getMessage());
             }
-            handler.postDelayed(this, espera);
+            programarSiguiente(espera);
         }
     };
+
+    static final String ACCION_TIC = "es.avisosaviones.TIC";
+    private long ultimaComprobacion = 0;
+    private long esperaActual = 0;
+    private boolean enPrimerPlano = false;
+
+    /**
+     * Esperas cortas (algo a punto de llegar): el móvil se mantiene despierto ese rato.
+     * Esperas largas: el móvil puede dormir y una alarma lo despierta para la siguiente comprobación.
+     */
+    private void programarSiguiente(long ms) {
+        esperaActual = ms;
+        handler.removeCallbacks(comprobar);
+        if (ms <= 60_000L) {
+            cancelarTic();
+            wakeLock.acquire(ms + 15_000L);
+        } else {
+            if (wakeLock.isHeld()) wakeLock.release();
+            programarTic(ms);
+        }
+        handler.postDelayed(comprobar, ms); // con la pantalla encendida llega a su hora; dormido, lo despierta la alarma
+    }
+
+    private PendingIntent piTic() {
+        return PendingIntent.getService(this, 5, new Intent(this, VigilanciaService.class).setAction(ACCION_TIC),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    private void programarTic(long ms) {
+        android.app.AlarmManager am = getSystemService(android.app.AlarmManager.class);
+        long cuando = SystemClock.elapsedRealtime() + ms;
+        if (Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()) {
+            am.setExactAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, cuando, piTic());
+        } else {
+            am.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, cuando, piTic());
+        }
+    }
+
+    private void cancelarTic() {
+        getSystemService(android.app.AlarmManager.class).cancel(piTic());
+    }
 
     @Override
     public void onCreate() {
@@ -102,6 +146,7 @@ public class VigilanciaService extends Service {
         lm = (LocationManager) getSystemService(LOCATION_SERVICE);
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "avisosaviones:vigilancia");
+        wakeLock.setReferenceCounted(false);
     }
 
     @Override
@@ -113,6 +158,15 @@ public class VigilanciaService extends Service {
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
             return START_NOT_STICKY;
+        }
+
+        if (intent != null && ACCION_TIC.equals(intent.getAction()) && enPrimerPlano) {
+            // Alarma: toca comprobar (si no se ha hecho ya hace nada con la pantalla encendida)
+            if (SystemClock.elapsedRealtime() - ultimaComprobacion > esperaActual * 0.7) {
+                handler.removeCallbacks(comprobar);
+                handler.post(comprobar);
+            }
+            return START_STICKY;
         }
 
         Notification n = notificacionServicio("Vigilando el cielo…");
@@ -132,10 +186,10 @@ public class VigilanciaService extends Service {
             return START_NOT_STICKY;
         }
 
+        enPrimerPlano = true;
         // Si el hilo de trabajo se ha quedado colgado (sin latidos), se cambia por uno nuevo
         if (!Vigilante.vivo(this)) reiniciarHilo();
 
-        if (!wakeLock.isHeld()) wakeLock.acquire();
         empezarUbicacion();
         handler.removeCallbacks(comprobar);
         handler.post(comprobar);
@@ -167,6 +221,7 @@ public class VigilanciaService extends Service {
             Vigilante.programar(this, 10_000L);
         }
         handler.removeCallbacksAndMessages(null);
+        cancelarTic();
         try { lm.removeUpdates(oyente); } catch (Exception ignored) {}
         if (wakeLock.isHeld()) wakeLock.release();
         hilo.quitSafely();
@@ -188,12 +243,21 @@ public class VigilanciaService extends Service {
         try {
             lm.removeUpdates(oyente);
             Looper looper = hilo.getLooper();
-            for (String prov : new String[]{LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER}) {
-                if (prov.equals(LocationManager.GPS_PROVIDER) && !fina) continue;
+            // Ahorro: ubicación por wifi/red cada 3 min (de sobra para radios de km); GPS solo si no hay red.
+            // Además se aprovechan gratis las ubicaciones que pidan otras apps (proveedor pasivo).
+            boolean red = lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+            for (String prov : new String[]{LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER, LocationManager.PASSIVE_PROVIDER}) {
+                if (!fina && !prov.equals(LocationManager.NETWORK_PROVIDER)) continue;
+                if (prov.equals(LocationManager.GPS_PROVIDER) && red) {
+                    Location ult = lm.getLastKnownLocation(prov);
+                    if (ult != null) oyente.onLocationChanged(ult);
+                    continue;
+                }
                 if (!lm.isProviderEnabled(prov)) continue;
                 Location ult = lm.getLastKnownLocation(prov);
                 if (ult != null) oyente.onLocationChanged(ult);
-                lm.requestLocationUpdates(prov, 60_000L, 50f, oyente, looper);
+                boolean gps = prov.equals(LocationManager.GPS_PROVIDER);
+                lm.requestLocationUpdates(prov, gps ? 300_000L : 180_000L, gps ? 200f : 100f, oyente, looper);
             }
         } catch (SecurityException e) {
             publicarEstado("Falta permiso de ubicación.");
@@ -202,11 +266,13 @@ public class VigilanciaService extends Service {
 
     // ---------------------------------------------------------------- consulta
 
-    private void comprobarCielo() throws Exception {
+    /** Comprueba el cielo y devuelve cuántos ms esperar hasta la siguiente comprobación. */
+    private long comprobarCielo() throws Exception {
+        long base = Ajustes.intervaloS(this) * 1000L;
         Location yo = ultimaUbicacion;
         if (yo == null) {
             publicarEstado("Esperando ubicación… (¿tienes la ubicación activada?)");
-            return;
+            return Math.max(base, 30_000L);
         }
 
         List<Alerta> alertas = Alertas.cargar(this);
@@ -214,9 +280,13 @@ public class VigilanciaService extends Service {
         for (Alerta al : alertas) if (al.activa) activas.add(al);
         if (activas.isEmpty()) {
             publicarEstado("Sin alertas encendidas\nEnciende alguna en la app");
-            return;
+            return 120_000L;
         }
-        double radioConsultaKm = Math.min(400, Alertas.radioMaximo(activas)); // 0 si todas son "sin límite"
+        double radioAlertasKm = Math.min(400, Alertas.radioMaximo(activas)); // 0 si todas son "sin límite"
+        // Se mira un radio más amplio para prever quién va a entrar y cuándo
+        double radioConsultaKm = radioAlertasKm > 0
+                ? Math.min(460, Math.max(radioAlertasKm, Ajustes.radioPrevisionKm(this))) : 0;
+        double lat0 = yo.getLatitude(), lon0 = yo.getLongitude();
 
         // Aparatos alrededor (alertas con distancia) + búsquedas globales (alertas sin límite)
         Map<String, JSONObject> porHex = new java.util.LinkedHashMap<>();
@@ -251,6 +321,9 @@ public class VigilanciaService extends Service {
 
         Map<String, String[]> fr24 = null; // se descarga solo si hace falta, una vez por vuelta
         int cerca = 0, coinciden = 0, enviados = 0;
+        // Previsión: cuándo entra en alguna alerta el primero que viene hacia aquí
+        double proximaS = Double.MAX_VALUE;
+        String quienLlega = null;
         String errorAparato = null;
         double masCerca = Double.MAX_VALUE;
         long ahora = System.currentTimeMillis();
@@ -264,7 +337,7 @@ public class VigilanciaService extends Service {
                     a.getDouble("lat"), a.getDouble("lon"), d);
             Alerta.Aeronave av = new Alerta.Aeronave();
             av.distKm = d[0] / 1000.0;
-            if (av.distKm <= radioConsultaKm) {
+            if (av.distKm <= radioAlertasKm) {
                 cerca++;
                 masCerca = Math.min(masCerca, av.distKm);
             }
@@ -278,6 +351,22 @@ public class VigilanciaService extends Service {
             av.indicativo = a.optString("flight", "").trim();
             av.squawk = a.optString("squawk", "").trim();
             av.servicio = Servicios.de(this, a.optString("hex", ""), av.matricula);
+
+            // ¿Cuándo podría entrar en alguna alerta? (si ya se avisó hace poco, no hace falta)
+            String hexP = a.optString("hex", "?").toUpperCase(Locale.ROOT);
+            Long avisadoP = avisados.get(hexP);
+            if (avisadoP == null || ahora - avisadoP >= ENFRIAMIENTO_MS) {
+                for (Alerta al : activas) {
+                    if (al.sinLimite() || av.distKm <= al.radioKm) continue;
+                    if (!al.coincideSalvoDistancia(av)) continue;
+                    double t = segundosHastaEntrar(lat0, lon0, a, av.distKm, al.radioKm, av.heli);
+                    if (t < proximaS) {
+                        proximaS = t;
+                        quienLlega = !av.indicativo.isEmpty() ? av.indicativo
+                                : (!av.matricula.isEmpty() ? av.matricula : hexP);
+                    }
+                }
+            }
 
             // Alertas que cumple sin mirar la ruta
             List<Alerta> candidatas = new ArrayList<>();
@@ -320,7 +409,7 @@ public class VigilanciaService extends Service {
                     Sonidos.canal(this, cumplida));
             ultimoAviso = System.currentTimeMillis();
             // Tope de avisos NUEVOS por vuelta (los ya avisados no cuentan); el resto sale en la siguiente
-            if (++enviados >= 10) break;
+            if (++enviados >= 10) { proximaS = 0; break; }
           } catch (Exception ex) {
             // Un aparato con datos raros no debe impedir revisar los demás
             errorAparato = ex.getClass().getSimpleName() + ": " + ex.getMessage();
@@ -338,14 +427,72 @@ public class VigilanciaService extends Service {
         String extra = (ultimoAviso > 0
                 ? " · último aviso " + new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(ultimoAviso)) : "")
                 + (errorAparato != null ? "\n⚠️ " + errorAparato : "");
+        // Siguiente comprobación: justo antes de que llegue el primero (con margen), entre el mínimo y el máximo.
+        // El máximo también cubre lo que aún no vemos: lo más rápido (≈1000 km/h) que entre por el borde del radio amplio.
+        long maxMs = Ajustes.esperaMaxS(this) * 1000L;
+        if (radioConsultaKm > radioAlertasKm && radioAlertasKm > 0) {
+            maxMs = Math.min(maxMs, (long) ((radioConsultaKm - radioAlertasKm) / 1000.0 * 3600_000L) - 30_000L);
+        }
+        if (!globales.isEmpty()) maxMs = Math.min(maxMs, 120_000L);
+        maxMs = Math.max(maxMs, base);
+        long espera = proximaS == Double.MAX_VALUE ? maxMs : (long) (proximaS * 1000) - 20_000L;
+        espera = Math.max(base, Math.min(maxMs, espera));
+        String prevision = " · próxima en " + duracion(espera)
+                + (quienLlega != null && proximaS < 1800 ? " (" + quienLlega + " llega en ~" + duracion((long) (proximaS * 1000)) + ")" : "");
+        extra = prevision + extra;
+
         String txt = String.format(Locale.getDefault(),
                 "%s\n%d cumplen tus alertas%s · comprobado a las %s · GPS ±%.0f m%s",
                 titulo, coinciden, globales.isEmpty() ? "" : " · " + lejos.length() + " en búsquedas sin límite",
                 hora, yo.getAccuracy(),
                 estadoFr24.isEmpty() ? "" : " · " + estadoFr24) + extra;
         publicarEstado(txt);
-        actualizarNotificacionServicio(String.format(Locale.getDefault(),
-                "Vigilando · %d cerca · %s", cerca, hora));
+        String textoFijo = String.format(Locale.getDefault(), "Vigilando · %d cerca", cerca);
+        if (!textoFijo.equals(ultimoTextoFijo)) { // actualizar la notificación solo si cambia (gasta menos)
+            actualizarNotificacionServicio(textoFijo);
+            ultimoTextoFijo = textoFijo;
+        }
+        return espera;
+    }
+
+    private String ultimoTextoFijo = "";
+
+    private static String duracion(long ms) {
+        long s = Math.max(0, ms / 1000);
+        if (s < 90) return s + " s";
+        return Math.round(s / 60.0) + " min";
+    }
+
+    /**
+     * Segundos hasta que el aparato entre en un círculo de radio rKm alrededor de (lat0, lon0),
+     * suponiendo que sigue recto a la misma velocidad. Si está cerca, se usa también el peor caso
+     * (que gire hacia aquí) porque los giros cambian las cuentas. MAX_VALUE = no viene.
+     */
+    private static double segundosHastaEntrar(double lat0, double lon0, JSONObject a, double distKm, double rKm, boolean heli) {
+        double falta = distKm - rKm;
+        if (falta <= 0) return 0;
+        double gs = a.optDouble("gs", Double.NaN);          // nudos
+        double rumbo = a.optDouble("track", Double.NaN);    // grados
+        double kmh = Double.isNaN(gs) ? Double.NaN : gs * 1.852;
+        double peorKmh = heli ? 300 : (Double.isNaN(kmh) ? 900 : Math.max(kmh * 1.1, 250));
+        double peor = falta / peorKmh * 3600;
+        if (Double.isNaN(kmh) || Double.isNaN(rumbo) || kmh < 60) return peor; // parado, sin datos o muy lento
+
+        double este = (a.optDouble("lon") - lon0) * 111.32 * Math.cos(Math.toRadians(lat0));
+        double norte = (a.optDouble("lat") - lat0) * 110.57;
+        double v = kmh / 3600.0;                            // km/s
+        double vx = v * Math.sin(Math.toRadians(rumbo)), vy = v * Math.cos(Math.toRadians(rumbo));
+        double qa = vx * vx + vy * vy;
+        double qb = 2 * (este * vx + norte * vy);
+        double qc = este * este + norte * norte - rKm * rKm;
+        double disc = qb * qb - 4 * qa * qc;
+        double t = Double.MAX_VALUE;
+        if (disc >= 0) {
+            double t1 = (-qb - Math.sqrt(disc)) / (2 * qa);
+            if (t1 >= 0) t = t1;
+        }
+        if (falta < 15) t = Math.min(t, peor); // muy cerca: puede girar hacia aquí
+        return t;
     }
 
     private static final String[] BASES = {"https://api.airplanes.live/v2/", "https://api.adsb.lol/v2/"};

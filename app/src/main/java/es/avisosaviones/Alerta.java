@@ -87,6 +87,12 @@ final class Alerta {
         if (!activa) return false;
         if (!sinLimite() && a.distKm > radioKm) return false;
         if (distMinKm > 0 && a.distKm < distMinKm) return false;
+        return coincideSalvoDistancia(a);
+    }
+
+    /** ¿Podría saltar esta alerta con este aparato si se acercara? (para prever cuándo volver a mirar) */
+    boolean coincideSalvoDistancia(Aeronave a) {
+        if (!activa) return false;
         if (altMaxM > 0 && a.altM > altMaxM) return false;
         if (!clases.isEmpty() && !clases.contains(a.clase)) return false;
         if (soloMilitar && !a.militar) return false;

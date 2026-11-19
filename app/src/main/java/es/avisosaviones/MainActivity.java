@@ -86,6 +86,8 @@ public class MainActivity extends Activity {
                 != PackageManager.PERMISSION_GRANTED) l.add("ubicación «Permitir todo el tiempo»");
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         if (!pm.isIgnoringBatteryOptimizations(getPackageName())) l.add("batería «Sin restricciones»");
+        if (Build.VERSION.SDK_INT >= 31 && !getSystemService(android.app.AlarmManager.class).canScheduleExactAlarms())
+            l.add("«Alarmas y recordatorios» (para comprobar a su hora con el móvil en reposo)");
         return l;
     }
 
@@ -115,6 +117,21 @@ public class MainActivity extends Activity {
                             + "En Samsung, además: Ajustes → Batería → Límites de uso en segundo plano → "
                             + "quita Avisos Aviones de «Aplicaciones en suspensión» y «en suspensión profunda».")
                     .setPositiveButton("Continuar", (d, w) -> pedirSinOptimizacionBateria())
+                    .setNegativeButton("Ahora no", null)
+                    .show();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 31 && !getSystemService(android.app.AlarmManager.class).canScheduleExactAlarms()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("«Alarmas y recordatorios»")
+                    .setMessage("La app calcula cuándo va a llegar el próximo avión y deja dormir al móvil hasta entonces. "
+                            + "Con este permiso se despierta justo a tiempo; sin él, Android puede retrasar la comprobación unos minutos.")
+                    .setPositiveButton("Continuar", (d, w) -> {
+                        try {
+                            startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                    Uri.parse("package:" + getPackageName())));
+                        } catch (Exception ignored) {}
+                    })
                     .setNegativeButton("Ahora no", null)
                     .show();
         }
@@ -300,11 +317,23 @@ public class MainActivity extends Activity {
         LinearLayout l = new LinearLayout(this);
         l.setOrientation(LinearLayout.VERTICAL);
         l.setPadding(dp(24), dp(8), dp(24), 0);
-        l.addView(Ui.texto(this, "Comprobar cada (segundos)", 15, Ui.TEXTO, false));
+        l.addView(Ui.texto(this, "La app mira un radio amplio y calcula cuándo llegará el próximo avión a tus alertas; "
+                + "hasta entonces deja dormir al móvil.", 13, Ui.TEXTO_SUAVE, false));
+        l.addView(Ui.texto(this, "Radio de previsión (km)", 15, Ui.TEXTO, false), Ui.ancho(12, this));
+        EditText prev = new EditText(this);
+        prev.setInputType(InputType.TYPE_CLASS_NUMBER);
+        prev.setText(String.valueOf(Ajustes.radioPrevisionKm(this)));
+        l.addView(prev);
+        l.addView(Ui.texto(this, "Tiempo mínimo entre comprobaciones (segundos)", 15, Ui.TEXTO, false), Ui.ancho(8, this));
         EditText inter = new EditText(this);
         inter.setInputType(InputType.TYPE_CLASS_NUMBER);
         inter.setText(String.valueOf(Ajustes.intervaloS(this)));
         l.addView(inter);
+        l.addView(Ui.texto(this, "Tiempo máximo entre comprobaciones (minutos)", 15, Ui.TEXTO, false), Ui.ancho(8, this));
+        EditText maxi = new EditText(this);
+        maxi.setInputType(InputType.TYPE_CLASS_NUMBER);
+        maxi.setText(String.valueOf(Ajustes.esperaMaxS(this) / 60));
+        l.addView(maxi);
         TextView bat = Ui.botonSecundario(this, "🔋 Quitar ahorro de batería");
         bat.setOnClickListener(v -> pedirSinOptimizacionBateria());
         l.addView(bat, Ui.ancho(12, this));
@@ -315,9 +344,15 @@ public class MainActivity extends Activity {
                 .setTitle("Ajustes")
                 .setView(l)
                 .setPositiveButton("Guardar", (d, w) -> {
-                    int i = 15;
+                    int i = 15, p = 100, m = 5;
                     try { i = Integer.parseInt(inter.getText().toString().trim()); } catch (Exception ignored) {}
-                    Ajustes.prefs(this).edit().putInt(Ajustes.INTERVALO_S, Math.max(5, i)).apply();
+                    try { p = Integer.parseInt(prev.getText().toString().trim()); } catch (Exception ignored) {}
+                    try { m = Integer.parseInt(maxi.getText().toString().trim()); } catch (Exception ignored) {}
+                    Ajustes.prefs(this).edit()
+                            .putInt(Ajustes.INTERVALO_S, Math.max(10, i))
+                            .putInt(Ajustes.RADIO_PREVISION_KM, Math.max(10, Math.min(450, p)))
+                            .putInt(Ajustes.ESPERA_MAX_S, Math.max(1, Math.min(30, m)) * 60)
+                            .apply();
                 })
                 .setNegativeButton("Cancelar", null)
                 .show();

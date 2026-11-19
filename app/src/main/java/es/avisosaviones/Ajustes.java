@@ -41,6 +41,12 @@ final class Ajustes {
     static int intervaloS(Context c) { return prefs(c).getInt(INTERVALO_S, 15); }
     static boolean activo(Context c) { return prefs(c).getBoolean(ACTIVO, false); }
 
+    // Previsión: se mira un radio amplio y se calcula cuándo volver a mirar
+    static final String RADIO_PREVISION_KM = "radio_prevision_km";
+    static final String ESPERA_MAX_S = "espera_max_s";
+    static int radioPrevisionKm(Context c) { return prefs(c).getInt(RADIO_PREVISION_KM, 100); }
+    static int esperaMaxS(Context c) { return prefs(c).getInt(ESPERA_MAX_S, 300); }
+
     static float distMinKm(Context c) { return usa(c, DIST_MIN_KM) ? prefs(c).getFloat(DIST_MIN_KM, 0f) : 0f; }
     static int modoZona(Context c) { return prefs(c).getInt(MODO_ZONA, ZONA_DENTRO); }
     static float radioExtKm(Context c) { return prefs(c).getFloat(RADIO_EXT_KM, 50f); }
