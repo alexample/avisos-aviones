@@ -70,18 +70,26 @@ jobs:
         run: gradle --no-daemon assembleRelease
 
       - name: Renombrar APK
-        run: cp app/build/outputs/apk/release/app-release.apk AvisosAviones.apk
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk AvisosAviones.apk
+          cp pegasus/build/outputs/apk/release/pegasus-release.apk PegasusDGT.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AvisosAviones
-          path: AvisosAviones.apk
+          name: APKs
+          path: |
+            AvisosAviones.apk
+            PegasusDGT.apk
 
       - name: Publicar en Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.${{ github.run_number }}
           name: Avisos Aviones v1.${{ github.run_number }}
-          body: Descarga **AvisosAviones.apk** e instálala en tu Android.
-          files: AvisosAviones.apk
+          body: |
+            - **AvisosAviones.apk**: avisos de aviones y helicópteros con alertas.
+            - **PegasusDGT.apk**: solo helicópteros Pegasus de la DGT, al conducir.
+          files: |
+            AvisosAviones.apk
+            PegasusDGT.apk
           make_latest: true
