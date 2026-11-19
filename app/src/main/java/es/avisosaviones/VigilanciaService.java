@@ -257,7 +257,7 @@ public class VigilanciaService extends Service {
                 Location ult = lm.getLastKnownLocation(prov);
                 if (ult != null) oyente.onLocationChanged(ult);
                 boolean gps = prov.equals(LocationManager.GPS_PROVIDER);
-                lm.requestLocationUpdates(prov, gps ? 300_000L : 180_000L, gps ? 200f : 100f, oyente, looper);
+                lm.requestLocationUpdates(prov, gps ? 300_000L : 180_000L, 0f, oyente, looper);
             }
         } catch (SecurityException e) {
             publicarEstado("Falta permiso de ubicación.");
@@ -270,9 +270,11 @@ public class VigilanciaService extends Service {
     private long comprobarCielo() throws Exception {
         long base = Ajustes.intervaloS(this) * 1000L;
         Location yo = ultimaUbicacion;
+        // Sin ubicación o muy vieja (por ejemplo, quieto en casa): pedir una al momento
+        if (yo == null || System.currentTimeMillis() - yo.getTime() > 10 * 60_000L) pedirUbicacionYa();
         if (yo == null) {
-            publicarEstado("Esperando ubicación… (¿tienes la ubicación activada?)");
-            return Math.max(base, 30_000L);
+            publicarEstado("Esperando ubicación…\nSi tarda, comprueba que la ubicación del móvil está encendida");
+            return 15_000L;
         }
 
         List<Alerta> alertas = Alertas.cargar(this);
@@ -939,7 +941,28 @@ public class VigilanciaService extends Service {
     }
 
     private void publicarEstado(String texto) {
+        // Se guarda para que la pantalla lo muestre al volver a la app (aunque falten minutos para la próxima comprobación)
+        Ajustes.prefs(this).edit().putString("ultimo_estado", texto)
+                .putLong("ultimo_estado_hora", System.currentTimeMillis()).apply();
         Intent i = new Intent(ACCION_ESTADO).setPackage(getPackageName()).putExtra(EXTRA_TEXTO, texto);
         sendBroadcast(i);
+    }
+
+    /** Pide una ubicación al momento (sin esperar a que te muevas); llega a oyente.onLocationChanged. */
+    private void pedirUbicacionYa() {
+        boolean fina = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        try {
+            for (String prov : new String[]{LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER}) {
+                if (prov.equals(LocationManager.GPS_PROVIDER) && !fina) continue;
+                if (!lm.isProviderEnabled(prov)) continue;
+                if (Build.VERSION.SDK_INT >= 30) {
+                    lm.getCurrentLocation(prov, null, command -> handler.post(command), l -> {
+                        if (l != null) oyente.onLocationChanged(l);
+                    });
+                } else {
+                    lm.requestSingleUpdate(prov, oyente, hilo.getLooper());
+                }
+            }
+        } catch (SecurityException ignored) {}
     }
 }

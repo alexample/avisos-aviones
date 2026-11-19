@@ -296,9 +296,16 @@ public class MainActivity extends Activity {
             return;
         }
         if (txt == null) {
-            estadoTitulo.setText("Vigilando…");
-            estadoDetalle.setText("Buscando tu ubicación");
-            return;
+            // Al volver a la app: lo último que dijo la vigilancia (si es reciente)
+            long hora = Ajustes.prefs(this).getLong("ultimo_estado_hora", 0);
+            String ultimo = Ajustes.prefs(this).getString("ultimo_estado", null);
+            if (ultimo != null && System.currentTimeMillis() - hora < 20 * 60_000L) {
+                txt = ultimo;
+            } else {
+                estadoTitulo.setText("Vigilando…");
+                estadoDetalle.setText("Primera comprobación en marcha");
+                return;
+            }
         }
         int salto = txt.indexOf('\n');
         estadoTitulo.setText(salto > 0 ? txt.substring(0, salto) : txt);
