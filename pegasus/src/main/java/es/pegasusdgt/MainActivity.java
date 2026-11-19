@@ -194,7 +194,7 @@ public class MainActivity extends Activity {
         tAvi.addView(avistamientos, Ui.ancho(4, this));
         col.addView(tAvi, Ui.ancho(12, this));
 
-        TextView nota = Ui.texto(this, "Datos: airplanes.live y adsb.lol. Solo aparecen cuando el helicóptero emite su "
+        TextView nota = Ui.texto(this, "Datos: adsb.lol, adsb.fi (opendata.adsb.fi) y airplanes.live. Solo aparecen cuando el helicóptero emite su "
                 + "posición (ADS-B); si en un vuelo no lo hace, no se puede ver. No uses el móvil mientras conduces: "
                 + "la app avisa por voz.", 12, Ui.TEXTO_SUAVE, false);
         nota.setPadding(dp(4), 0, dp(4), 0);

@@ -499,7 +499,26 @@ public class VigilanciaService extends Service {
         return t;
     }
 
-    private static final String[] BASES = {"https://api.airplanes.live/v2/", "https://api.adsb.lol/v2/"};
+    // Orden de preferencia. airplanes.live va el último: puede bloquear (403) a quien consulte mucho.
+    private static final String[] BASES = {"https://api.adsb.lol/v2/", "https://opendata.adsb.fi/api/v2/",
+            "https://api.airplanes.live/v2/"};
+
+    /** Cada servidor llama distinto a algunas búsquedas. null = ese servidor no la tiene. */
+    private static String rutaPara(String base, String ruta) {
+        if (!base.contains("adsb.fi")) return ruta;
+        if (ruta.startsWith("point/")) {
+            String[] p = ruta.split("/");
+            return "lat/" + p[1] + "/lon/" + p[2] + "/dist/" + p[3];
+        }
+        if (ruta.startsWith("squawk/")) return "sqk/" + ruta.substring(7);
+        if (ruta.startsWith("reg/")) return "registration/" + ruta.substring(4);
+        if (ruta.startsWith("type/")) return null;
+        return ruta;
+    }
+
+    private static String nombreServidor(String base) {
+        return base.contains("adsb.lol") ? "adsb.lol" : base.contains("adsb.fi") ? "adsb.fi" : "airplanes.live";
+    }
 
     /** Los dos servidores nos están limitando (HTTP 429): hay que esperar. */
     static final class ServidoresOcupados extends Exception {
@@ -517,10 +536,13 @@ public class VigilanciaService extends Service {
     /** Pide una ruta de la API (p. ej. "point/40.4/-3.7/5") al primer servidor que no esté en pausa. */
     private JSONArray pedir(String ruta) throws Exception {
         Exception ultimoError = null;
+        StringBuilder errores = new StringBuilder();
         long ahora = System.currentTimeMillis();
         long menorEspera = Long.MAX_VALUE;
         boolean todosEnPausa = true;
         for (String base : BASES) {
+            String rutaServidor = rutaPara(base, ruta);
+            if (rutaServidor == null) continue;
             Long hasta = pausaHasta.get(base);
             if (hasta != null && ahora < hasta) {
                 menorEspera = Math.min(menorEspera, hasta - ahora);
@@ -528,12 +550,19 @@ public class VigilanciaService extends Service {
             }
             todosEnPausa = false;
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(base + ruta).openConnection();
+                HttpURLConnection c = (HttpURLConnection) new URL(base + rutaServidor).openConnection();
                 c.setConnectTimeout(10_000);
                 c.setReadTimeout(15_000);
-                c.setRequestProperty("User-Agent", "AvisosAviones/1.0 (Android)");
+                c.setRequestProperty("User-Agent", "AvisosAviones/2.9 (Android; https://github.com/alexample/avisos-aviones)");
                 c.setRequestProperty("Accept", "application/json");
                 int code = c.getResponseCode();
+                if (code == 403) {
+                    // Bloqueado por ese servidor: no insistir en un buen rato y usar los otros
+                    pausaHasta.put(base, ahora + 30 * 60_000L);
+                    errores.append(errores.length() > 0 ? " · " : "").append(nombreServidor(base)).append(" 403");
+                    ultimoError = new Exception("HTTP 403");
+                    continue;
+                }
                 if (code == 429 || code == 503) {
                     long espera;
                     long retry = -1;
@@ -547,6 +576,7 @@ public class VigilanciaService extends Service {
                     pausaHasta.put(base, ahora + espera);
                     menorEspera = Math.min(menorEspera, espera);
                     todosEnPausa = true;
+                    errores.append(errores.length() > 0 ? " · " : "").append(nombreServidor(base)).append(" ").append(code);
                     ultimoError = new Exception("HTTP " + code);
                     continue;
                 }
@@ -563,12 +593,13 @@ public class VigilanciaService extends Service {
                 return ac != null ? ac : new JSONArray();
             } catch (Exception e) {
                 ultimoError = e;
+                errores.append(errores.length() > 0 ? " · " : "").append(nombreServidor(base)).append(" ").append(e.getMessage());
                 todosEnPausa = false;
             }
         }
         if (menorEspera != Long.MAX_VALUE && (todosEnPausa || ultimoError == null)) throw new ServidoresOcupados(menorEspera);
         throw new Exception("sin conexión con los servidores de datos ("
-                + (ultimoError != null ? ultimoError.getMessage() : "?") + ")");
+                + (errores.length() > 0 ? errores : (ultimoError != null ? ultimoError.getMessage() : "?")) + ")");
     }
 
     private JSONArray descargar(double lat, double lon, int radioNm) throws Exception {

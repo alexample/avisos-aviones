@@ -58,7 +58,9 @@ public class PegasusService extends Service {
     private static final long QUIETO_MAX_MS = 10 * 60_000L;   // parado tanto tiempo: fin de trayecto
     private static final long GRACIA_FIN_MS = 2 * 60_000L;    // tras "bajó del coche"
 
-    private static final String[] BASES = {"https://api.airplanes.live/v2/", "https://api.adsb.lol/v2/"};
+    private static final String[] BASES = {"https://api.adsb.lol/v2/", "https://opendata.adsb.fi/api/v2/",
+            "https://api.airplanes.live/v2/"};
+    private final Map<String, Long> bloqueadoHasta = new HashMap<>();
 
     private HandlerThread hilo;
     private Handler handler;
@@ -331,16 +333,32 @@ public class PegasusService extends Service {
 
     private JSONArray descargar(double lat, double lon, int radioNm) throws Exception {
         Exception ultimo = null;
+        StringBuilder errores = new StringBuilder();
+        int nm = Math.max(1, Math.min(250, radioNm));
         for (int intento = 0; intento < BASES.length; intento++) {
             String b = BASES[(base + intento) % BASES.length];
+            Long bloq = bloqueadoHasta.get(b);
+            if (bloq != null && System.currentTimeMillis() < bloq) continue;
+            String url = b.contains("adsb.fi")
+                    ? String.format(Locale.US, "%slat/%.5f/lon/%.5f/dist/%d", b, lat, lon, nm)
+                    : String.format(Locale.US, "%spoint/%.5f/%.5f/%d", b, lat, lon, nm);
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(String.format(Locale.US, "%spoint/%.5f/%.5f/%d",
-                        b, lat, lon, Math.max(1, Math.min(250, radioNm)))).openConnection();
+                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
                 c.setConnectTimeout(8_000);
                 c.setReadTimeout(10_000);
-                c.setRequestProperty("User-Agent", "PegasusDGT/1.0 (Android)");
+                c.setRequestProperty("User-Agent", "PegasusDGT/1.1 (Android; https://github.com/alexample/avisos-aviones)");
                 int code = c.getResponseCode();
-                if (code == 429) { ultimo = new Exception("HTTP 429"); continue; }
+                if (code == 403) { // bloqueado por ese servidor: 30 min sin usarlo
+                    bloqueadoHasta.put(b, System.currentTimeMillis() + 30 * 60_000L);
+                    errores.append(errores.length() > 0 ? " · " : "").append(new URL(b).getHost()).append(" 403");
+                    continue;
+                }
+                if (code == 429) {
+                    bloqueadoHasta.put(b, System.currentTimeMillis() + 30_000L);
+                    errores.append(errores.length() > 0 ? " · " : "").append(new URL(b).getHost()).append(" 429");
+                    ultimo = new Exception("HTTP 429");
+                    continue;
+                }
                 if (code != 200) throw new Exception("HTTP " + code);
                 StringBuilder sb = new StringBuilder();
                 try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
@@ -348,14 +366,17 @@ public class PegasusService extends Service {
                     while ((linea = r.readLine()) != null) sb.append(linea);
                 }
                 base = (base + intento + 1) % BASES.length; // repartir entre los dos servidores
-                JSONArray ac = new JSONObject(sb.toString()).optJSONArray("ac");
+                JSONObject json = new JSONObject(sb.toString());
+                JSONArray ac = json.optJSONArray("ac");
+                if (ac == null) ac = json.optJSONArray("aircraft"); // adsb.fi
                 return ac != null ? ac : new JSONArray();
             } catch (Exception e) {
                 ultimo = e;
+                errores.append(errores.length() > 0 ? " · " : "").append(e.getMessage());
             }
         }
         if (ultimo != null && "HTTP 429".equals(ultimo.getMessage())) pausaHasta = System.currentTimeMillis() + 30_000L;
-        throw new Exception("sin conexión con los servidores (" + (ultimo != null ? ultimo.getMessage() : "?") + ")");
+        throw new Exception("sin conexión con los servidores (" + (errores.length() > 0 ? errores : "?") + ")");
     }
 
     // ------------------------------------------------------------ notificación fija y estado

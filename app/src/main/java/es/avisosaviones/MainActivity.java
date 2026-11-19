@@ -226,7 +226,7 @@ public class MainActivity extends Activity {
         diagnostico.setOnClickListener(v -> startActivity(new Intent(this, PermisosActivity.class)));
         col.addView(diagnostico, Ui.ancho(14, this));
 
-        TextView nota = Ui.texto(this, "Datos: airplanes.live y adsb.lol · rutas de Flightradar24 y adsbdb. "
+        TextView nota = Ui.texto(this, "Datos: adsb.lol, adsb.fi (opendata.adsb.fi) y airplanes.live · rutas de Flightradar24 y adsbdb. "
                 + "Los aparatos que no emiten ADS-B (muchos helicópteros militares o policiales) no aparecen.",
                 12, Ui.TEXTO_SUAVE, false);
         nota.setPadding(dp(4), 0, dp(4), 0);

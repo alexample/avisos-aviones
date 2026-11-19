@@ -118,6 +118,8 @@ public class Vigilante extends BroadcastReceiver {
                 case ApplicationExitInfo.REASON_PERMISSION_CHANGE: motivo = "cambio de permisos"; break;
                 case ApplicationExitInfo.REASON_DEPENDENCY_DIED: motivo = "dependencia del sistema"; break;
                 case ApplicationExitInfo.REASON_EXIT_SELF: motivo = "se cerró ella misma"; break;
+                case 15: motivo = "cambio de estado de la app"; break;
+                case 16: motivo = "actualización de la app"; break;
                 default: motivo = "otro motivo (" + e.getReason() + ")";
             }
             String desc = e.getDescription();
