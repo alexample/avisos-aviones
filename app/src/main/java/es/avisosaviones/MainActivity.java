@@ -223,7 +223,7 @@ public class MainActivity extends Activity {
         diagnostico = Ui.texto(this, "", 12, Color.parseColor("#9A3412"), false);
         diagnostico.setPadding(dp(14), dp(12), dp(14), dp(12));
         diagnostico.setBackground(Ui.redondeado(Color.parseColor("#FFF7ED"), 14, this));
-        diagnostico.setOnClickListener(v -> { ubicacionPreguntada = false; pedirSegundoPlano(); });
+        diagnostico.setOnClickListener(v -> startActivity(new Intent(this, PermisosActivity.class)));
         col.addView(diagnostico, Ui.ancho(14, this));
 
         TextView nota = Ui.texto(this, "Datos: airplanes.live y adsb.lol · rutas de Flightradar24 y adsbdb. "
@@ -317,6 +317,10 @@ public class MainActivity extends Activity {
         LinearLayout l = new LinearLayout(this);
         l.setOrientation(LinearLayout.VERTICAL);
         l.setPadding(dp(24), dp(8), dp(24), 0);
+        TextView permisos = Ui.botonSecundario(this, "🔐 Permisos"
+                + (PermisosActivity.faltanImprescindibles(this) > 0 ? "  ⚠️ faltan " + PermisosActivity.faltanImprescindibles(this) : "  ✅"));
+        permisos.setOnClickListener(v -> startActivity(new Intent(this, PermisosActivity.class)));
+        l.addView(permisos, Ui.ancho(4, this));
         l.addView(Ui.texto(this, "La app mira un radio amplio y calcula cuándo llegará el próximo avión a tus alertas; "
                 + "hasta entonces deja dormir al móvil.", 13, Ui.TEXTO_SUAVE, false));
         l.addView(Ui.texto(this, "Radio de previsión (km)", 15, Ui.TEXTO, false), Ui.ancho(12, this));
@@ -334,11 +338,6 @@ public class MainActivity extends Activity {
         maxi.setInputType(InputType.TYPE_CLASS_NUMBER);
         maxi.setText(String.valueOf(Ajustes.esperaMaxS(this) / 60));
         l.addView(maxi);
-        TextView bat = Ui.botonSecundario(this, "🔋 Quitar ahorro de batería");
-        bat.setOnClickListener(v -> pedirSinOptimizacionBateria());
-        l.addView(bat, Ui.ancho(12, this));
-        l.addView(Ui.texto(this, "Recomendado: si no, Android puede dormir la app y dejarías de recibir avisos.",
-                12, Ui.TEXTO_SUAVE, false), Ui.ancho(6, this));
 
         new AlertDialog.Builder(this)
                 .setTitle("Ajustes")
@@ -383,7 +382,9 @@ public class MainActivity extends Activity {
         refrescarBoton();
         mostrarEstado(null);
         pintarDiagnostico();
-        if (!faltaParaSegundoPlano().isEmpty()) diagnostico.postDelayed(this::pedirSegundoPlano, 800);
+        if (PermisosActivity.faltanImprescindibles(this) > 0) {
+            diagnostico.postDelayed(() -> startActivity(new Intent(this, PermisosActivity.class).putExtra("todos", true)), 800);
+        }
     }
 
     /** @return true si ha tenido que pedir permisos. */

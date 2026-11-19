@@ -40,6 +40,10 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity
+            android:name=".PermisosActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".HistorialActivity"
             android:exported="false" />
 
