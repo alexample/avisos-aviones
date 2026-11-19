@@ -7,26 +7,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          for p in "40.4/-3.7/250" "41.4/2.1/200" "37.4/-5.9/200" "43.3/-3.8/200" "39.5/-0.4/150" "28.3/-15.6/200" "42.8/-1.6/150"; do
-            curl -sS -m 30 "https://api.adsb.lol/v2/point/$p" -o "p_$(echo $p|tr / _).json" -w "%{http_code} "; head -c 150 "p_$(echo $p|tr / _).json"; echo; sleep 1.2
+          for ua in "AvisosAviones/1.0 (Android)" "curl/8.5.0"; do
+            for u in "https://api.adsb.lol/v2/point/40.4/-3.7/50" "https://api.adsb.lol/v2/lat/40.4/lon/-3.7/dist/50" "https://opendata.adsb.fi/api/v2/lat/40.4/lon/-3.7/dist/50" "https://api.airplanes.live/v2/point/40.4/-3.7/50"; do
+              echo "RES [$ua] $u -> $(curl -s -m 20 -A "$ua" -o /tmp/o -w '%{http_code}' "$u") $(head -c 80 /tmp/o | tr -d '\n')"
+              sleep 1.5
+            done
           done
-          python3 - <<'PY'
-          import json, glob, collections
-          ac = {}
-          for f in glob.glob('p_*.json'):
-              try:
-                  for a in json.load(open(f)).get('ac', []): ac[a.get('hex')] = a
-              except Exception as e: print('ERR', f, e)
-          print('TOTAL', len(ac))
-          ops = collections.Counter()
-          for a in ac.values():
-              r = a.get('r','') or ''
-              if r.startswith('EC-') or a.get('category')=='A7' or (a.get('dbFlags',0)&1):
-                  ops[(a.get('ownOp',''), a.get('category',''), a.get('t',''))]+=1
-          for (o,c,t),n in sorted(ops.items(), key=lambda x:-x[1])[:120]:
-              print('OP', repr(o), c, t, n)
-          print('--- helis / A7 detail')
-          for a in ac.values():
-              if a.get('category')=='A7' or (a.get('t','') or '').startswith(('EC','H1','AS','A1','R44','B06','BK','S76','AW','EH')):
-                  print('H', a.get('flight','').strip(), a.get('r',''), a.get('t',''), a.get('desc',''), '|', a.get('ownOp',''), '| flags', a.get('dbFlags',0), 'sqk', a.get('squawk',''))
-          PY
