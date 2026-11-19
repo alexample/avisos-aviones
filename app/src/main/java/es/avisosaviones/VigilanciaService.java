@@ -474,7 +474,9 @@ public class VigilanciaService extends Service {
         double gs = a.optDouble("gs", Double.NaN);          // nudos
         double rumbo = a.optDouble("track", Double.NaN);    // grados
         double kmh = Double.isNaN(gs) ? Double.NaN : gs * 1.852;
-        double peorKmh = heli ? 300 : (Double.isNaN(kmh) ? 900 : Math.max(kmh * 1.1, 250));
+        // Helicópteros: giran, patrullan y dan vueltas, así que nunca se fía de su rumbo: siempre el peor caso
+        // (que venga directo a ~280 km/h, más de lo que corren un EC135 o un AS355)
+        double peorKmh = heli ? 280 : (Double.isNaN(kmh) ? 900 : Math.max(kmh * 1.1, 250));
         double peor = falta / peorKmh * 3600;
         if (Double.isNaN(kmh) || Double.isNaN(rumbo) || kmh < 60) return peor; // parado, sin datos o muy lento
 
@@ -491,7 +493,7 @@ public class VigilanciaService extends Service {
             double t1 = (-qb - Math.sqrt(disc)) / (2 * qa);
             if (t1 >= 0) t = t1;
         }
-        if (falta < 15) t = Math.min(t, peor); // muy cerca: puede girar hacia aquí
+        if (heli || falta < 15) t = Math.min(t, peor); // helicóptero o muy cerca: puede girar hacia aquí
         return t;
     }
 
