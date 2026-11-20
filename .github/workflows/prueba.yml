@@ -7,8 +7,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          for u in https://api.adsb.lol/v2/sqk/7700 https://api.adsb.lol/v2/squawk/7700 https://api.adsb.lol/v2/mil https://api.adsb.lol/v2/reg/EC-MQQ https://api.adsb.lol/v2/hex/3453d3 https://api.adsb.lol/v2/callsign/ANE150N https://api.adsb.lol/v2/type/A388 \
-                   https://opendata.adsb.fi/api/v2/sqk/7700 https://opendata.adsb.fi/api/v2/mil https://opendata.adsb.fi/api/v2/registration/EC-MQQ https://opendata.adsb.fi/api/v2/reg/EC-MQQ https://opendata.adsb.fi/api/v2/hex/3453d3 https://opendata.adsb.fi/api/v2/icao/3453d3 https://opendata.adsb.fi/api/v2/callsign/ANE150N https://opendata.adsb.fi/api/v2/type/A388 ; do
-            echo "RES $u -> $(curl -s -m 20 -A 'AvisosAviones/1.0 (Android)' -o /tmp/o -w '%{http_code}' "$u") $(head -c 60 /tmp/o | tr -d '\n')"
-            sleep 1.5
-          done
+          curl -s -m 30 "https://api.adsb.lol/v2/point/40.4/-3.7/200" -o m.json; sleep 1.5
+          curl -s -m 30 "https://api.adsb.lol/v2/point/51.5/-0.1/150" -o l.json
+          python3 - <<'PY'
+          import json
+          for f in ['m.json','l.json']:
+              ac=json.load(open(f)).get('ac',[])
+              con=[a for a in ac if 'oat' in a or 'tat' in a]
+              viento=[a for a in ac if 'ws' in a]
+              print('RES', f, 'total', len(ac), 'con temperatura', len(con), 'con viento', len(viento))
+              for a in con[:6]:
+                  print('RES  ', (a.get('flight') or '').strip(), a.get('t'), 'alt', a.get('alt_baro'), 'oat', a.get('oat'), 'tat', a.get('tat'), 'viento', a.get('wd'), a.get('ws'), 'mach', a.get('mach'), 'tas', a.get('tas'))
+          PY
