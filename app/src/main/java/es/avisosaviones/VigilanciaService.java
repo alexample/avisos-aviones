@@ -62,10 +62,17 @@ public class VigilanciaService extends Service {
     private volatile Location ultimaUbicacion;
     private final Map<String, Long> avisados = new HashMap<>();
     private long ultimoAviso = 0;
+    private long ultimoLogUbicacion = 0;
     private int idAviso = 100;
 
     private final LocationListener oyente = new LocationListener() {
         @Override public void onLocationChanged(Location l) {
+            long ahoraL = System.currentTimeMillis();
+            if (ahoraL - ultimoLogUbicacion > 60_000L) {
+                ultimoLogUbicacion = ahoraL;
+                Depuracion.log(VigilanciaService.this, "ubicación", l.getProvider() + " ±" + Math.round(l.getAccuracy())
+                        + " m, de hace " + Math.max(0, (ahoraL - l.getTime()) / 1000) + " s");
+            }
             if (ultimaUbicacion == null || l.getAccuracy() <= ultimaUbicacion.getAccuracy() + 50
                     || l.getTime() - ultimaUbicacion.getTime() > 120_000) {
                 ultimaUbicacion = l;
@@ -82,13 +89,19 @@ public class VigilanciaService extends Service {
             ultimaComprobacion = SystemClock.elapsedRealtime();
             Ajustes.prefs(VigilanciaService.this).edit().putLong(Vigilante.LATIDO, System.currentTimeMillis()).apply();
             long espera = Ajustes.intervaloS(VigilanciaService.this) * 1000L;
+            long t0 = SystemClock.elapsedRealtime();
+            Depuracion.log(VigilanciaService.this, "comprobar", "▶ inicio (hilo " + Thread.currentThread().getId() + ")");
             try {
                 espera = comprobarCielo();
+                Depuracion.log(VigilanciaService.this, "comprobar", "■ fin en " + (SystemClock.elapsedRealtime() - t0) + " ms · "
+                        + Ajustes.prefs(VigilanciaService.this).getString("ultimo_estado", "").replace('\n', ' | '));
             } catch (ServidoresOcupados o) {
+                Depuracion.log(VigilanciaService.this, "comprobar", "servidores ocupados, espera " + o.esperaMs / 1000 + " s");
                 espera = Math.max(espera, o.esperaMs + 1000);
                 publicarEstado("Servidores ocupados · reintento en " + Math.max(1, o.esperaMs / 1000) + " s"
                         + "\nLos servidores gratuitos limitan las consultas; la app espera y sigue sola.");
             } catch (Throwable t) {
+                Depuracion.error(VigilanciaService.this, "comprobar", "fallo en la comprobación", t);
                 publicarEstado("Error: " + t.getMessage());
             }
             programarSiguiente(espera);
@@ -114,9 +127,12 @@ public class VigilanciaService extends Service {
         if (ms <= 60_000L || !exactas) {
             cancelarTic();
             wakeLock.acquire(ms + 15_000L);
+            Depuracion.log(this, "programar", "siguiente en " + ms / 1000 + " s (despierto, reloj propio"
+                    + (exactas ? "" : "; sin alarmas exactas") + ")");
         } else {
             if (wakeLock.isHeld()) wakeLock.release();
             programarTic(ms);
+            Depuracion.log(this, "programar", "siguiente en " + ms / 1000 + " s (dormido, alarma exacta)");
         }
         handler.postDelayed(comprobar, ms); // con la pantalla encendida llega a su hora; dormido, lo despierta la alarma
     }
@@ -143,6 +159,13 @@ public class VigilanciaService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        Depuracion.log(this, "servicio", "creado (proceso " + android.os.Process.myPid() + ")");
+        // Cualquier cuelgue queda apuntado en el registro antes de cerrar
+        final Thread.UncaughtExceptionHandler previo = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((th, ex) -> {
+            Depuracion.error(getApplicationContext(), "CUELGUE", "en el hilo " + th.getName(), ex);
+            if (previo != null) previo.uncaughtException(th, ex);
+        });
         crearCanales();
         hilo = new HandlerThread("vigilancia");
         hilo.start();
@@ -155,6 +178,10 @@ public class VigilanciaService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        Depuracion.log(this, "servicio", "orden: " + (intent == null ? "reinicio de Android (sin intent)"
+                : intent.getAction() != null ? intent.getAction().replace("es.avisosaviones.", "")
+                : "arrancar" + (intent.hasExtra("desde") ? " desde " + intent.getStringExtra("desde") : ""))
+                + " · enPrimerPlano=" + enPrimerPlano + " · vivo=" + Vigilante.vivo(this));
         if (intent != null && ACCION_PARAR.equals(intent.getAction())) {
             Ajustes.prefs(this).edit().putBoolean(Ajustes.ACTIVO, false).apply();
             Vigilante.cancelar(this);
@@ -166,9 +193,13 @@ public class VigilanciaService extends Service {
 
         if (intent != null && ACCION_TIC.equals(intent.getAction()) && enPrimerPlano) {
             // Alarma: toca comprobar (si no se ha hecho ya hace nada con la pantalla encendida)
-            if (SystemClock.elapsedRealtime() - ultimaComprobacion > esperaActual * 0.7) {
+            long hace = SystemClock.elapsedRealtime() - ultimaComprobacion;
+            if (hace > esperaActual * 0.7) {
+                Depuracion.log(this, "alarma", "despierta tras " + hace / 1000 + " s → comprobar");
                 handler.removeCallbacks(comprobar);
                 handler.post(comprobar);
+            } else {
+                Depuracion.log(this, "alarma", "ignorada, ya se comprobó hace " + hace / 1000 + " s");
             }
             return START_STICKY;
         }
@@ -181,6 +212,7 @@ public class VigilanciaService extends Service {
                 startForeground(ID_SERVICIO, n);
             }
         } catch (Exception e) {
+            Depuracion.error(this, "servicio", "startForeground denegado", e);
             // Android no deja reanudarla en segundo plano: avisar para que el usuario toque y la reanude.
             // (Se queda "activa" para que el vigilante lo siga intentando.)
             Vigilante.apuntarMotivo(this, "Android no dejó reanudarla (" + e.getClass().getSimpleName() + ")");
@@ -192,7 +224,10 @@ public class VigilanciaService extends Service {
 
         enPrimerPlano = true;
         // Si el hilo de trabajo se ha quedado colgado (sin latidos), se cambia por uno nuevo
-        if (!Vigilante.vivo(this)) reiniciarHilo();
+        if (!Vigilante.vivo(this)) {
+            Depuracion.log(this, "servicio", "sin latido reciente → hilo nuevo");
+            reiniciarHilo();
+        }
 
         empezarUbicacion();
         handler.removeCallbacks(comprobar);
@@ -214,11 +249,13 @@ public class VigilanciaService extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
+        Depuracion.log(this, "servicio", "app quitada de recientes");
         if (Ajustes.activo(this)) Vigilante.programar(this, 5_000L);
     }
 
     @Override
     public void onDestroy() {
+        Depuracion.log(this, "servicio", "destruido · activo=" + Ajustes.activo(this));
         if (Ajustes.activo(this)) {
             // No lo ha parado el usuario: lo ha cerrado Android
             Vigilante.apuntarMotivo(this, "Android cerró el servicio");
@@ -324,6 +361,10 @@ public class VigilanciaService extends Service {
             if (o != null && !porHex.containsKey(o.optString("hex"))) porHex.put(o.optString("hex"), o);
         }
         List<JSONObject> aparatos = new ArrayList<>(porHex.values());
+        Depuracion.log(this, "datos", aparatos.size() + " aeronaves (radio " + Math.round(radioConsultaKm) + " km"
+                + (globales.isEmpty() ? "" : ", + " + lejos.length() + " sin límite") + ") · yo "
+                + String.format(Locale.US, "%.4f,%.4f ±%.0f m, de hace %d s", lat0, lon0, yo.getAccuracy(),
+                (System.currentTimeMillis() - yo.getTime()) / 1000));
 
         Map<String, String[]> fr24 = null; // se descarga solo si hace falta, una vez por vuelta
         int cerca = 0, coinciden = 0, enviados = 0;
@@ -465,6 +506,10 @@ public class VigilanciaService extends Service {
             }
         }
 
+        Depuracion.log(this, "previsión", "cerca=" + cerca + " · cumplen=" + coinciden + " · avisos=" + enviados
+                + " · anticipados posibles=" + prealertas.size()
+                + (quienLlega != null ? " · primero: " + quienLlega + " en " + Math.round(proximaS) + " s" : " · nadie viene")
+                + " · espera " + espera / 1000 + " s");
         String prevision = " · próxima en " + duracion(espera)
                 + (quienLlega != null && proximaS < 1800 ? " (" + quienLlega + " llega en ~" + duracion((long) (proximaS * 1000)) + ")" : "");
         extra = prevision + extra;
@@ -623,6 +668,7 @@ public class VigilanciaService extends Service {
                 c.setRequestProperty("User-Agent", "AvisosAviones/2.9 (Android; https://github.com/alexample/avisos-aviones)");
                 c.setRequestProperty("Accept", "application/json");
                 int code = c.getResponseCode();
+                if (code != 200) Depuracion.log(this, "servidor", nombreServidor(base) + " " + code + " · " + rutaServidor);
                 if (code == 403) {
                     // Bloqueado por ese servidor: no insistir en un buen rato y usar los otros
                     pausaHasta.put(base, ahora + 30 * 60_000L);
@@ -654,11 +700,13 @@ public class VigilanciaService extends Service {
                     while ((linea = r.readLine()) != null) sb.append(linea);
                 }
                 pausaMs.remove(base);
+                Depuracion.log(this, "servidor", nombreServidor(base) + " 200 · " + rutaServidor);
                 JSONObject json = new JSONObject(sb.toString());
                 JSONArray ac = json.optJSONArray("ac");
                 if (ac == null) ac = json.optJSONArray("aircraft");
                 return ac != null ? ac : new JSONArray();
             } catch (Exception e) {
+                Depuracion.log(this, "servidor", nombreServidor(base) + " error " + e);
                 ultimoError = e;
                 errores.append(errores.length() > 0 ? " · " : "").append(nombreServidor(base)).append(" ").append(e.getMessage());
                 todosEnPausa = false;
@@ -862,6 +910,7 @@ public class VigilanciaService extends Service {
 
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.notify(idAviso++, n);
+        Depuracion.log(this, "AVISO", titulo + " · " + nombreAlerta + (llegada != null ? " · " + llegada : ""));
         if (idAviso > 10_000) idAviso = 100;
     }
 
@@ -1050,6 +1099,7 @@ public class VigilanciaService extends Service {
 
     /** Pide una ubicación al momento (sin esperar a que te muevas); llega a oyente.onLocationChanged. */
     private void pedirUbicacionYa() {
+        Depuracion.log(this, "ubicación", "pidiendo una al momento");
         boolean fina = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
         try {
             for (String prov : new String[]{LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER}) {

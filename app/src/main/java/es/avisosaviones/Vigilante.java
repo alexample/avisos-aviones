@@ -32,6 +32,8 @@ public class Vigilante extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context c, Intent intent) {
+        Depuracion.log(c, "vigilante", "despierta (" + intent.getAction() + ") · activo=" + Ajustes.activo(c)
+                + " · vivo=" + vivo(c));
         if (!Ajustes.activo(c)) return;
         revisar(c, "vigilante");
         programar(c, 15 * 60 * 1000L);
@@ -67,6 +69,7 @@ public class Vigilante extends BroadcastReceiver {
             c.startForegroundService(new Intent(c, VigilanciaService.class).putExtra("desde", quien));
             c.getSystemService(NotificationManager.class).cancel(ID_PARADA);
         } catch (Exception e) {
+            Depuracion.error(c, "vigilante", "no pudo arrancar el servicio", e);
             apuntarMotivo(c, "Android no dejó reanudarla en segundo plano (" + e.getClass().getSimpleName() + ")");
             avisarParada(c);
         }

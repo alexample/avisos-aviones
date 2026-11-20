@@ -62,14 +62,23 @@ public class MainActivity extends Activity {
         refrescarBoton();
         pintarAlertas();
         // Si debería estar vigilando pero Android la ha cerrado, se reanuda (desde aquí sí está permitido)
+        long latido = Ajustes.prefs(this).getLong(Vigilante.LATIDO, 0);
+        Depuracion.log(this, "app", "abierta · activo=" + Ajustes.activo(this) + " · última comprobación hace "
+                + (latido == 0 ? "?" : (System.currentTimeMillis() - latido) / 1000 + " s"));
         if (Ajustes.activo(this) && !Vigilante.vivo(this)) Vigilante.revisar(this, "app");
         pintarDiagnostico();
     }
 
     private void pintarDiagnostico() {
         StringBuilder sb = new StringBuilder();
+        long latido = Ajustes.prefs(this).getLong(Vigilante.LATIDO, 0);
+        if (Ajustes.activo(this) && latido > 0 && !Vigilante.vivo(this)) {
+            sb.append("⚠️ La vigilancia no comprobaba nada desde las ")
+                    .append(new java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(new java.util.Date(latido)))
+                    .append(". Se ha reanudado; mira ⚙️ → Registro para ver qué pasó.");
+        }
         String motivo = Ajustes.prefs(this).getString(Vigilante.MOTIVO_PARADA, "");
-        if (!motivo.isEmpty()) sb.append("Última parada: ").append(motivo);
+        if (!motivo.isEmpty()) sb.append(sb.length() > 0 ? "\n" : "").append("Última parada: ").append(motivo);
         String cierre = Vigilante.ultimoCierre(this);
         if (!cierre.isEmpty()) sb.append(sb.length() > 0 ? "\n" : "").append("Último cierre de Android: ").append(cierre);
         List<String> falta = faltaParaSegundoPlano();
@@ -300,7 +309,8 @@ public class MainActivity extends Activity {
             long hora = Ajustes.prefs(this).getLong("ultimo_estado_hora", 0);
             String ultimo = Ajustes.prefs(this).getString("ultimo_estado", null);
             if (ultimo != null && System.currentTimeMillis() - hora < 20 * 60_000L) {
-                txt = ultimo;
+                long min = (System.currentTimeMillis() - hora) / 60_000L;
+                txt = ultimo + (min >= 2 ? "  ·  (estado de hace " + min + " min)" : "");
             } else {
                 estadoTitulo.setText("Vigilando…");
                 estadoDetalle.setText("Primera comprobación en marcha");
@@ -328,6 +338,9 @@ public class MainActivity extends Activity {
                 + (PermisosActivity.faltanImprescindibles(this) > 0 ? "  ⚠️ faltan " + PermisosActivity.faltanImprescindibles(this) : "  ✅"));
         permisos.setOnClickListener(v -> startActivity(new Intent(this, PermisosActivity.class)));
         l.addView(permisos, Ui.ancho(4, this));
+        TextView registro = Ui.botonSecundario(this, "📝 Registro de actividad");
+        registro.setOnClickListener(v -> startActivity(new Intent(this, RegistroActivity.class)));
+        l.addView(registro, Ui.ancho(8, this));
         l.addView(Ui.texto(this, "La app mira un radio amplio y calcula cuándo llegará el próximo avión a tus alertas; "
                 + "hasta entonces deja dormir al móvil.", 13, Ui.TEXTO_SUAVE, false));
         l.addView(Ui.texto(this, "Radio de previsión (km)", 15, Ui.TEXTO, false), Ui.ancho(12, this));

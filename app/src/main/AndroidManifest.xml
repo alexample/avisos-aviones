@@ -44,6 +44,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".RegistroActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".HistorialActivity"
             android:exported="false" />
 
