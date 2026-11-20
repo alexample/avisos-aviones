@@ -94,7 +94,7 @@ public class VigilanciaService extends Service {
             try {
                 espera = comprobarCielo();
                 Depuracion.log(VigilanciaService.this, "comprobar", "■ fin en " + (SystemClock.elapsedRealtime() - t0) + " ms · "
-                        + Ajustes.prefs(VigilanciaService.this).getString("ultimo_estado", "").replace('\n', ' | '));
+                        + Ajustes.prefs(VigilanciaService.this).getString("ultimo_estado", "").replace("\n", " | "));
             } catch (ServidoresOcupados o) {
                 Depuracion.log(VigilanciaService.this, "comprobar", "servidores ocupados, espera " + o.esperaMs / 1000 + " s");
                 espera = Math.max(espera, o.esperaMs + 1000);
