@@ -833,6 +833,9 @@ public class VigilanciaService extends Service {
         if (altM >= 0) unir(l3, String.format(Locale.getDefault(), "%,d m", altM));
         if (!Double.isNaN(nudos)) unir(l3, String.format(Locale.getDefault(), "%.0f km/h", nudos * 1.852));
         cuerpo.append(l3);
+        // Línea 3b: temperatura y viento a su altitud (calculados por los receptores; no siempre hay)
+        String meteo = meteo(a, altM);
+        if (!meteo.isEmpty()) cuerpo.append('\n').append(meteo);
         // Línea 4: rumbo, subida/bajada, squawk
         StringBuilder l4 = new StringBuilder();
         if (!Double.isNaN(rumbo)) unir(l4, "Rumbo " + puntoCardinal(rumbo) + String.format(Locale.US, " (%.0f°)", rumbo));
@@ -877,6 +880,7 @@ public class VigilanciaService extends Service {
             e.put("ruta", ruta);
             e.put("militar", militar);
             if (!Double.isNaN(rumbo)) e.put("rumbo", puntoCardinal(rumbo));
+            if (!meteo.isEmpty()) e.put("meteo", meteo);
             if (textoEmergencia != null) e.put("emergencia", textoEmergencia);
             e.put("url_fr24", urlFr24);
             e.put("reg", matricula);
@@ -1034,6 +1038,35 @@ public class VigilanciaService extends Service {
         if (codigo.isEmpty()) codigo = ap.optString("icao_code", "").trim();
         if (lugar.isEmpty()) return codigo;
         return codigo.isEmpty() ? lugar : lugar + " (" + codigo + ")";
+    }
+
+    /**
+     * "🌡 −57 °C · 💨 viento de 160 km/h del oeste", o "" si no hay datos o no son creíbles.
+     * La temperatura sale del Mach y la velocidad real que el avión responde a los radares (Mode S EHS).
+     */
+    private static String meteo(JSONObject a, int altM) {
+        StringBuilder sb = new StringBuilder();
+        double oat = a.optDouble("oat", Double.NaN);
+        if (!Double.isNaN(oat) && altM >= 0) {
+            // Atmósfera estándar: 15 °C en el suelo, −6,5 °C por km hasta 11 km, luego −56,5 °C
+            double estandar = 15 - 6.5 * Math.min(altM / 1000.0, 11);
+            if (oat > -90 && oat < 55 && Math.abs(oat - estandar) <= 30) {
+                sb.append("🌡 ").append(Math.round(oat)).append(" °C");
+            }
+        }
+        double ws = a.optDouble("ws", Double.NaN), wd = a.optDouble("wd", Double.NaN);
+        if (!Double.isNaN(ws) && !Double.isNaN(wd) && ws >= 0 && ws < 300) {
+            if (sb.length() > 0) sb.append(" · ");
+            long kmh = Math.round(ws * 1.852);
+            if (kmh < 5) sb.append("💨 sin apenas viento");
+            else {
+                String[] de = {"del norte", "del noreste", "del este", "del sureste", "del sur", "del suroeste",
+                        "del oeste", "del noroeste"};
+                sb.append("💨 viento de ").append(kmh).append(" km/h ")
+                        .append(de[(int) Math.round(((wd % 360) + 360) % 360 / 45.0) % 8]);
+            }
+        }
+        return sb.toString();
     }
 
     private static String puntoCardinal(double grados) {

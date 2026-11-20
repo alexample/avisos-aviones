@@ -118,6 +118,8 @@ public class HistorialActivity extends Activity {
             if (vel >= 0) linea3.append(String.format(Locale.getDefault(), " · %.0f km/h", vel));
             String rumbo = e.optString("rumbo");
             if (!rumbo.isEmpty()) linea3.append(" · rumbo ").append(rumbo);
+            String meteo = e.optString("meteo");
+            if (!meteo.isEmpty()) linea3.append("\n").append(meteo);
             String ruta = e.optString("ruta");
             String emerg = e.optString("emergencia");
             String alertaNombre = e.optString("alerta");
