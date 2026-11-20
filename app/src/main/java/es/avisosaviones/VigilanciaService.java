@@ -107,7 +107,11 @@ public class VigilanciaService extends Service {
     private void programarSiguiente(long ms) {
         esperaActual = ms;
         handler.removeCallbacks(comprobar);
-        if (ms <= 60_000L) {
+        // Sin permiso de alarmas exactas, Android puede retrasar el despertar varios minutos:
+        // entonces el móvil se mantiene despierto y manda el reloj propio (como antes)
+        boolean exactas = Build.VERSION.SDK_INT < 31
+                || getSystemService(android.app.AlarmManager.class).canScheduleExactAlarms();
+        if (ms <= 60_000L || !exactas) {
             cancelarTic();
             wakeLock.acquire(ms + 15_000L);
         } else {
@@ -326,6 +330,7 @@ public class VigilanciaService extends Service {
         // Previsión: cuándo entra en alguna alerta el primero que viene hacia aquí
         double proximaS = Double.MAX_VALUE;
         String quienLlega = null;
+        List<Object[]> prealertas = new ArrayList<>(); // {aparato, Aeronave, Alerta, segundos, km de paso}
         String errorAparato = null;
         double masCerca = Double.MAX_VALUE;
         long ahora = System.currentTimeMillis();
@@ -362,6 +367,9 @@ public class VigilanciaService extends Service {
                     if (al.sinLimite() || av.distKm <= al.radioKm) continue;
                     if (!al.coincideSalvoDistancia(av)) continue;
                     double t = segundosHastaEntrar(lat0, lon0, a, av.distKm, al.radioKm, av.heli);
+                    // Trayectoria recta: ¿va a pasar por la zona en breve? → candidato a aviso anticipado
+                    double[] linea = enLinea(lat0, lon0, a, al.radioKm);
+                    if (linea != null && linea[0] <= 90) prealertas.add(new Object[]{a, av, al, linea[0], linea[1]});
                     if (t < proximaS) {
                         proximaS = t;
                         quienLlega = !av.indicativo.isEmpty() ? av.indicativo
@@ -386,29 +394,14 @@ public class VigilanciaService extends Service {
             if (fr24 == null) fr24 = cargarFr24(yo.getLatitude(), yo.getLongitude(), Math.max(radioConsultaKm, 5));
             String[] datosFr24 = fr24.get(hex); // {id, origen, destino, vuelo, indicativo}
 
-            Alerta cumplida = null;
-            String origen = null, destino = null, vuelo = null;
-            for (Alerta al : candidatas) {
-                if (!al.necesitaRuta()) { cumplida = al; break; }
-                if (origen == null) {
-                    origen = datosFr24 != null ? datosFr24[1] : "";
-                    destino = datosFr24 != null ? datosFr24[2] : "";
-                    vuelo = datosFr24 != null ? datosFr24[3] : "";
-                    if ((origen.isEmpty() && destino.isEmpty()) || vuelo.isEmpty()) {
-                        String[] r = obtenerRuta(av.indicativo); // adsbdb como respaldo
-                        if (origen.isEmpty() && destino.isEmpty()) { origen = r[2]; destino = r[3]; }
-                        if (vuelo.isEmpty()) vuelo = r[4];
-                    }
-                }
-                if (al.coincideRuta(origen, destino, vuelo)) { cumplida = al; break; }
-            }
+            Alerta cumplida = alertaCumplida(candidatas, av, datosFr24);
             if (cumplida == null) continue;
 
             coinciden++;
             avisados.put(hex, ahora);
             avisar(a, av.heli, av.distKm, av.altM, av.distKm < 3, datosFr24,
                     (av.servicio.isEmpty() ? "" : Servicios.legible(av.servicio) + " · ") + "🔔 " + cumplida.nombre,
-                    Sonidos.canal(this, cumplida));
+                    Sonidos.canal(this, cumplida), null);
             ultimoAviso = System.currentTimeMillis();
             // Tope de avisos NUEVOS por vuelta (los ya avisados no cuentan); el resto sale en la siguiente
             if (++enviados >= 10) { proximaS = 0; break; }
@@ -439,6 +432,39 @@ public class VigilanciaService extends Service {
         maxMs = Math.max(maxMs, base);
         long espera = proximaS == Double.MAX_VALUE ? maxMs : (long) (proximaS * 1000) - 20_000L;
         espera = Math.max(base, Math.min(maxMs, espera));
+        // Avisos anticipados: lo que va a cruzar una zona antes de la próxima comprobación (o en < 90 s).
+        // Así no se escapa un avión rápido que entra y sale entre dos comprobaciones.
+        prealertas.sort((x, y) -> Double.compare((double) x[3], (double) y[3]));
+        for (Object[] pa : prealertas) {
+            if (enviados >= 10) break;
+            double t = (double) pa[3];
+            if (t * 1000 > espera + 30_000L) continue; // llegará después: lo verá la siguiente comprobación
+            JSONObject a = (JSONObject) pa[0];
+            Alerta.Aeronave av = (Alerta.Aeronave) pa[1];
+            Alerta al = (Alerta) pa[2];
+            String hex = a.optString("hex", "?").toUpperCase(Locale.ROOT);
+            Long ultimo = avisados.get(hex);
+            if (ultimo != null && ahora - ultimo < ENFRIAMIENTO_MS) continue;
+            try {
+                if (fr24 == null) fr24 = cargarFr24(lat0, lon0, Math.max(radioConsultaKm, 5));
+                String[] datosFr24 = fr24.get(hex);
+                List<Alerta> una = new ArrayList<>();
+                una.add(al);
+                if (alertaCumplida(una, av, datosFr24) == null) continue;
+                avisados.put(hex, ahora);
+                coinciden++;
+                enviados++;
+                String llegada = String.format(Locale.getDefault(), "Pasará a %s dentro de ~%s",
+                        Alerta.km((float) (double) pa[4]), duracion((long) (t * 1000)));
+                avisar(a, av.heli, av.distKm, av.altM, false, datosFr24,
+                        (av.servicio.isEmpty() ? "" : Servicios.legible(av.servicio) + " · ") + "🔔 " + al.nombre,
+                        Sonidos.canal(this, al), llegada);
+                ultimoAviso = System.currentTimeMillis();
+            } catch (Exception ex) {
+                errorAparato = ex.getClass().getSimpleName() + ": " + ex.getMessage();
+            }
+        }
+
         String prevision = " · próxima en " + duracion(espera)
                 + (quienLlega != null && proximaS < 1800 ? " (" + quienLlega + " llega en ~" + duracion((long) (proximaS * 1000)) + ")" : "");
         extra = prevision + extra;
@@ -458,6 +484,47 @@ public class VigilanciaService extends Service {
     }
 
     private String ultimoTextoFijo = "";
+
+    /** De las alertas candidatas, la primera que cumple también ruta, exclusiones y número de vuelo. */
+    private Alerta alertaCumplida(List<Alerta> candidatas, Alerta.Aeronave av, String[] datosFr24) {
+        String origen = null, destino = null, vuelo = null;
+        for (Alerta al : candidatas) {
+            if (!al.necesitaRuta()) return al;
+            if (origen == null) {
+                origen = datosFr24 != null ? datosFr24[1] : "";
+                destino = datosFr24 != null ? datosFr24[2] : "";
+                vuelo = datosFr24 != null ? datosFr24[3] : "";
+                if ((origen.isEmpty() && destino.isEmpty()) || vuelo.isEmpty()) {
+                    String[] r = obtenerRuta(av.indicativo); // adsbdb como respaldo
+                    if (origen.isEmpty() && destino.isEmpty()) { origen = r[2]; destino = r[3]; }
+                    if (vuelo.isEmpty()) vuelo = r[4];
+                }
+            }
+            if (al.coincideRuta(origen, destino, vuelo)) return al;
+        }
+        return null;
+    }
+
+    /**
+     * Siguiendo recto: {segundos hasta entrar en el círculo de radio rKm, km a los que pasará de ti en el punto
+     * más cercano}; null si no entra (o si no hay rumbo y velocidad fiables).
+     */
+    private static double[] enLinea(double lat0, double lon0, JSONObject a, double rKm) {
+        double gs = a.optDouble("gs", Double.NaN), rumbo = a.optDouble("track", Double.NaN);
+        if (Double.isNaN(gs) || Double.isNaN(rumbo) || gs * 1.852 < 60) return null;
+        double este = (a.optDouble("lon") - lon0) * 111.32 * Math.cos(Math.toRadians(lat0));
+        double norte = (a.optDouble("lat") - lat0) * 110.57;
+        double v = gs * 1.852 / 3600.0;
+        double vx = v * Math.sin(Math.toRadians(rumbo)), vy = v * Math.cos(Math.toRadians(rumbo));
+        double qa = vx * vx + vy * vy;
+        double tMin = -(este * vx + norte * vy) / qa;           // momento de máxima cercanía
+        if (tMin < 0) return null;                              // ya se aleja
+        double px = este + vx * tMin, py = norte + vy * tMin;
+        double paso = Math.sqrt(px * px + py * py);             // distancia mínima a la que pasará
+        if (paso > rKm) return null;                            // no llega a entrar
+        double tEntra = tMin - Math.sqrt(rKm * rKm - paso * paso) / v;
+        return new double[]{Math.max(0, tEntra), paso};
+    }
 
     private static String duracion(long ms) {
         long s = Math.max(0, ms / 1000);
@@ -660,7 +727,7 @@ public class VigilanciaService extends Service {
     // ---------------------------------------------------------------- notificaciones
 
     private void avisar(JSONObject a, boolean heli, double distKm, int altM, boolean dentro, String[] fr24,
-                        String nombreAlerta, String canal) {
+                        String nombreAlerta, String canal, String llegada) {
         String indicativo = a.optString("flight", "").trim();
         String matricula = a.optString("r", "").trim();
         String tipo = a.optString("t", "").trim();
@@ -691,7 +758,8 @@ public class VigilanciaService extends Service {
         String nombreTitulo = (!vueloFr24.isEmpty() && !vueloFr24.equalsIgnoreCase(indicativo))
                 ? vueloFr24 + " (" + nombre + ")" : nombre;
 
-        String donde = dentro ? " encima: " : String.format(Locale.getDefault(), " a %.0f km: ", distKm);
+        String donde = llegada != null ? " llegando: "
+                : dentro ? " encima: " : String.format(Locale.getDefault(), " a %.0f km: ", distKm);
         String titulo;
         if (textoEmergencia != null) titulo = "🚨 " + textoEmergencia + ": " + nombreTitulo;
         else if (militar) titulo = (heli ? "🚁🎖️ Helicóptero militar" : "✈️🎖️ Avión militar") + donde + nombreTitulo;
@@ -702,6 +770,7 @@ public class VigilanciaService extends Service {
         double piesMin = a.optDouble("baro_rate", a.optDouble("geom_rate", Double.NaN));
 
         StringBuilder cuerpo = new StringBuilder();
+        if (llegada != null) cuerpo.append("⏱ ").append(llegada).append('\n');
         // Línea 1: qué es
         StringBuilder l1 = new StringBuilder();
         unir(l1, !desc.isEmpty() ? desc : tipo);
