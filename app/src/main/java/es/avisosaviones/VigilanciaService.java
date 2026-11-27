@@ -167,6 +167,7 @@ public class VigilanciaService extends Service {
             if (previo != null) previo.uncaughtException(th, ex);
         });
         crearCanales();
+        Casa.escuchar(this);
         hilo = new HandlerThread("vigilancia");
         hilo.start();
         handler = new Handler(hilo.getLooper());
@@ -442,7 +443,7 @@ public class VigilanciaService extends Service {
             avisados.put(hex, ahora);
             avisar(a, av.heli, av.distKm, av.altM, av.distKm < 3, datosFr24,
                     (av.servicio.isEmpty() ? "" : Servicios.legible(av.servicio) + " · ") + "🔔 " + cumplida.nombre,
-                    Sonidos.canal(this, cumplida), null);
+                    Sonidos.canal(this, cumplida), null, Casa.enCasa(this) && !cumplida.tambienEnCasa);
             ultimoAviso = System.currentTimeMillis();
             // Tope de avisos NUEVOS por vuelta (los ya avisados no cuentan); el resto sale en la siguiente
             if (++enviados >= 10) { proximaS = 0; break; }
@@ -460,7 +461,9 @@ public class VigilanciaService extends Service {
         String titulo = cerca == 0 ? "Vigilando · cielo despejado"
                 : String.format(Locale.getDefault(), "Vigilando · %d %s (la más cercana a %s)",
                     cerca, cerca == 1 ? "aeronave" : "aeronaves", Alerta.km((float) masCerca));
-        String extra = (ultimoAviso > 0
+        String ssidCasa = Casa.enCasa(this) ? Casa.ssidActual(this) : null;
+        String extra = (ssidCasa != null ? " · 🏠 en casa (" + ssidCasa + "): avisos en silencio" : "")
+                + (ultimoAviso > 0
                 ? " · último aviso " + new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(ultimoAviso)) : "")
                 + (errorAparato != null ? "\n⚠️ " + errorAparato : "");
         // Siguiente comprobación: justo antes de que llegue el primero (con margen), entre el mínimo y el máximo.
@@ -499,7 +502,7 @@ public class VigilanciaService extends Service {
                         Alerta.km((float) (double) pa[4]), duracion((long) (t * 1000)));
                 avisar(a, av.heli, av.distKm, av.altM, false, datosFr24,
                         (av.servicio.isEmpty() ? "" : Servicios.legible(av.servicio) + " · ") + "🔔 " + al.nombre,
-                        Sonidos.canal(this, al), llegada);
+                        Sonidos.canal(this, al), llegada, Casa.enCasa(this) && !al.tambienEnCasa);
                 ultimoAviso = System.currentTimeMillis();
             } catch (Exception ex) {
                 errorAparato = ex.getClass().getSimpleName() + ": " + ex.getMessage();
@@ -775,7 +778,7 @@ public class VigilanciaService extends Service {
     // ---------------------------------------------------------------- notificaciones
 
     private void avisar(JSONObject a, boolean heli, double distKm, int altM, boolean dentro, String[] fr24,
-                        String nombreAlerta, String canal, String llegada) {
+                        String nombreAlerta, String canal, String llegada, boolean silencio) {
         String indicativo = a.optString("flight", "").trim();
         String matricula = a.optString("r", "").trim();
         String tipo = a.optString("t", "").trim();
@@ -887,7 +890,7 @@ public class VigilanciaService extends Service {
             e.put("callsign", indicativo);
             if (!vueloFr24.isEmpty()) e.put("vuelo", vueloFr24);
             e.put("dentro", dentro);
-            e.put("alerta", nombreAlerta);
+            e.put("alerta", nombreAlerta + (silencio ? " · 🏠 en casa (sin avisar)" : ""));
             Registro.guardar(this, e);
         } catch (Exception ignored) {}
 
@@ -913,8 +916,12 @@ public class VigilanciaService extends Service {
                 .build();
 
         NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.notify(idAviso++, n);
-        Depuracion.log(this, "AVISO", titulo + " · " + nombreAlerta + (llegada != null ? " · " + llegada : ""));
+        if (silencio) {
+            Depuracion.log(this, "AVISO", "🏠 en casa, sin notificar: " + titulo + " · " + nombreAlerta);
+        } else {
+            nm.notify(idAviso++, n);
+            Depuracion.log(this, "AVISO", titulo + " · " + nombreAlerta + (llegada != null ? " · " + llegada : ""));
+        }
         if (idAviso > 10_000) idAviso = 100;
     }
 

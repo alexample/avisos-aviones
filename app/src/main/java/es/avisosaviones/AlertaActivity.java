@@ -302,6 +302,16 @@ public class AlertaActivity extends Activity {
         swVibrar.setChecked(alerta.vibrar);
         swVibrar.setOnCheckedChangeListener((b, on) -> alerta.vibrar = on);
         tSon.addView(swVibrar, Ui.ancho(12, this));
+        Switch swCasa = new Switch(this);
+        swCasa.setText("🏠 Avisar también en casa");
+        swCasa.setTextSize(15);
+        swCasa.setTextColor(Ui.TEXTO);
+        swCasa.setChecked(alerta.tambienEnCasa);
+        swCasa.setOnCheckedChangeListener((b, on) -> alerta.tambienEnCasa = on);
+        tSon.addView(swCasa, Ui.ancho(12, this));
+        tSon.addView(Ui.texto(this, Casa.activo(this)
+                        ? "Con el modo casa, esta alerta solo avisa en casa si activas esto."
+                        : "El modo casa está apagado (⚙️ → Modo casa).", 12, Ui.TEXTO_SUAVE, false), Ui.ancho(4, this));
         col.addView(tSon, Ui.ancho(12, this));
 
         // ---------- Botones

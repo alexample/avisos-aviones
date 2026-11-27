@@ -338,6 +338,9 @@ public class MainActivity extends Activity {
                 + (PermisosActivity.faltanImprescindibles(this) > 0 ? "  ⚠️ faltan " + PermisosActivity.faltanImprescindibles(this) : "  ✅"));
         permisos.setOnClickListener(v -> startActivity(new Intent(this, PermisosActivity.class)));
         l.addView(permisos, Ui.ancho(4, this));
+        TextView casa = Ui.botonSecundario(this, "🏠 Modo casa" + (Casa.activo(this) ? "  ✅" : ""));
+        casa.setOnClickListener(v -> abrirModoCasa());
+        l.addView(casa, Ui.ancho(8, this));
         TextView registro = Ui.botonSecundario(this, "📝 Registro de actividad");
         registro.setOnClickListener(v -> startActivity(new Intent(this, RegistroActivity.class)));
         l.addView(registro, Ui.ancho(8, this));
@@ -374,6 +377,69 @@ public class MainActivity extends Activity {
                             .apply();
                 })
                 .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    /** Modo casa: elegir los wifis en los que no se avisa. */
+    private void abrirModoCasa() {
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(dp(24), dp(8), dp(24), 0);
+        l.addView(Ui.texto(this, "Con el móvil conectado a uno de estos wifis, los avisos salen en silencio "
+                + "(se siguen apuntando en el historial). Cada alerta puede avisar igualmente si activas "
+                + "«Avisar también en casa».", 13, Ui.TEXTO_SUAVE, false));
+        Switch sw = new Switch(this);
+        sw.setText("Modo casa");
+        sw.setTextSize(16);
+        sw.setTextColor(Ui.TEXTO);
+        sw.setChecked(Casa.activo(this));
+        sw.setOnCheckedChangeListener((b, on) -> Casa.activar(this, on));
+        l.addView(sw, Ui.ancho(12, this));
+
+        LinearLayout lista = new LinearLayout(this);
+        lista.setOrientation(LinearLayout.VERTICAL);
+        l.addView(lista, Ui.ancho(8, this));
+        Runnable[] pintar = new Runnable[1];
+        pintar[0] = () -> {
+            lista.removeAllViews();
+            List<String> w = Casa.wifis(this);
+            if (w.isEmpty()) lista.addView(Ui.texto(this, "Ningún wifi guardado todavía.", 14, Ui.TEXTO_SUAVE, false));
+            for (String ssid : w) {
+                TextView t = Ui.chip(this, "📶 " + ssid + "   ✕");
+                t.setOnClickListener(v -> {
+                    List<String> l2 = Casa.wifis(this);
+                    l2.remove(ssid);
+                    Casa.guardarWifis(this, l2);
+                    pintar[0].run();
+                });
+                lista.addView(t, Ui.ancho(6, this));
+            }
+        };
+        pintar[0].run();
+
+        String actual = Casa.ssidActual(this);
+        TextView anadir = Ui.botonSecundario(this, actual != null
+                ? "＋ Añadir «" + actual + "»" : "＋ Añadir el wifi actual");
+        anadir.setOnClickListener(v -> {
+            String s = Casa.ssidActual(this);
+            if (s == null) {
+                Toast.makeText(this, "No veo ningún wifi. Conéctate al de casa; Android solo deja ver su nombre "
+                        + "con la ubicación encendida y el permiso de ubicación.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            List<String> w = Casa.wifis(this);
+            if (!w.contains(s)) w.add(s);
+            Casa.guardarWifis(this, w);
+            Casa.activar(this, true);
+            sw.setChecked(true);
+            pintar[0].run();
+        });
+        l.addView(anadir, Ui.ancho(10, this));
+
+        new AlertDialog.Builder(this)
+                .setTitle("🏠 Modo casa")
+                .setView(l)
+                .setPositiveButton("Listo", null)
                 .show();
     }
 

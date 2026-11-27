@@ -27,6 +27,7 @@ final class Alerta {
     final List<String> servicios = new ArrayList<>();  // etiquetas del usuario (Servicios.IDS)
     String sonido = Sonidos.POR_DEFECTO;               // "", "silencio", "raw:sirena" o uri del móvil
     boolean vibrar = true;
+    boolean tambienEnCasa = false;                     // modo casa: avisar igualmente
     final List<String> origenes = new ArrayList<>();   // códigos IATA
     final List<String> destinos = new ArrayList<>();
     int altMaxM = 0;               // 0 = cualquier altitud
@@ -214,6 +215,7 @@ final class Alerta {
             o.put("servicios", new JSONArray(servicios));
             o.put("sonido", sonido);
             o.put("vibrar", vibrar);
+            o.put("en_casa", tambienEnCasa);
             o.put("origenes", new JSONArray(origenes));
             o.put("destinos", new JSONArray(destinos));
             o.put("alt_max_m", altMaxM);
@@ -252,6 +254,7 @@ final class Alerta {
         }
         a.sonido = o.optString("sonido", Sonidos.POR_DEFECTO);
         a.vibrar = o.optBoolean("vibrar", true);
+        a.tambienEnCasa = o.optBoolean("en_casa", false);
         JSONArray se = o.optJSONArray("servicios");
         if (se != null) for (int i = 0; i < se.length(); i++) a.servicios.add(se.optString(i));
         JSONArray mo = o.optJSONArray("modelos");
